@@ -1,125 +1,89 @@
 #!/usr/bin/env python3
 """
-카카오톡 나에게 보내기 - 새 공고 알림
+카카오톡 나에게 보내기 - 멀티유저
 """
-
+import os
 import json
 import logging
-from pathlib import Path
+from datetime import datetime, timedelta
+
 import requests
 
-BASE_DIR = Path(__file__).parent
-CONFIG_PATH = BASE_DIR / "config.json"
-TOKEN_PATH = BASE_DIR / "kakao_token.json"
+log = logging.getLogger("kakao_notify")
 
-log = logging.getLogger("kakao")
-
-
-def load_token():
-    if not TOKEN_PATH.exists():
-        raise FileNotFoundError("kakao_token.json 없음. python3 kakao_auth.py 먼저 실행하세요.")
-    return json.loads(TOKEN_PATH.read_text())
+KAKAO_REST_API_KEY = os.environ.get("KAKAO_REST_API_KEY", "")
+KAKAO_CLIENT_SECRET = os.environ.get("KAKAO_CLIENT_SECRET", "")
 
 
-def refresh_token():
-    """리프레시 토큰으로 액세스 토큰 갱신"""
-    config = json.loads(CONFIG_PATH.read_text())
-    token_data = load_token()
-    refresh = token_data.get("refresh_token")
-    if not refresh:
-        raise ValueError("refresh_token이 없습니다. kakao_auth.py를 다시 실행하세요.")
+def refresh_access_token(refresh_token):
+    data = {
+        "grant_type": "refresh_token",
+        "client_id": KAKAO_REST_API_KEY,
+        "refresh_token": refresh_token,
+    }
+    if KAKAO_CLIENT_SECRET:
+        data["client_secret"] = KAKAO_CLIENT_SECRET
+    r = requests.post("https://kauth.kakao.com/oauth/token", data=data, timeout=10)
+    r.raise_for_status()
+    return r.json()
 
+
+def ensure_fresh_token(user, on_token_refresh=None):
+    expires_at = user.get("expires_at")
+    try:
+        if expires_at and datetime.fromisoformat(expires_at) > datetime.now() + timedelta(minutes=5):
+            return user["access_token"]
+    except Exception:
+        pass
+
+    tok = refresh_access_token(user["refresh_token"])
+    new_access = tok["access_token"]
+    new_refresh = tok.get("refresh_token", user["refresh_token"])
+    new_expires = (datetime.now() + timedelta(seconds=int(tok.get("expires_in", 21600)) - 60)).isoformat()
+    if on_token_refresh:
+        on_token_refresh(user["kakao_id"], new_access, new_refresh, new_expires)
+    user["access_token"] = new_access
+    user["refresh_token"] = new_refresh
+    user["expires_at"] = new_expires
+    return new_access
+
+
+def send_memo(access_token, template_object):
     r = requests.post(
-        "https://kauth.kakao.com/oauth/token",
-        data={
-            "grant_type": "refresh_token",
-            "client_id": config["kakao_rest_api_key"],
-            "refresh_token": refresh,
-        },
+        "https://kapi.kakao.com/v2/api/talk/memo/default/send",
+        headers={"Authorization": f"Bearer {access_token}"},
+        data={"template_object": json.dumps(template_object, ensure_ascii=False)},
+        timeout=10,
     )
     r.raise_for_status()
-    new_data = r.json()
-
-    # 기존 토큰에 업데이트
-    token_data["access_token"] = new_data["access_token"]
-    if "refresh_token" in new_data:
-        token_data["refresh_token"] = new_data["refresh_token"]
-    TOKEN_PATH.write_text(json.dumps(token_data, indent=2, ensure_ascii=False))
-    log.info("카카오 토큰 갱신 완료")
-    return token_data
+    return r.json()
 
 
-def send_to_me(text):
-    """카카오톡 나에게 보내기 (텍스트)"""
-    token_data = load_token()
-    access_token = token_data["access_token"]
+def build_text(new_jobs, base_url=""):
+    lines = [f"🩺 새 채용공고 {len(new_jobs)}건"]
+    for j in new_jobs[:10]:
+        lines.append(f"• [{j['source']}] {j['title']} ({j.get('org', '')})")
+    if len(new_jobs) > 10:
+        lines.append(f"… 외 {len(new_jobs) - 10}건")
+    if base_url:
+        lines.append(f"\n👉 {base_url}")
+    return "\n".join(lines)
 
+
+def send_new_jobs_for_user(user, new_jobs, on_token_refresh=None, base_url=None):
+    if not base_url:
+        base_url = os.environ.get("PUBLIC_URL", "")
+    access = ensure_fresh_token(user, on_token_refresh=on_token_refresh)
+    text = build_text(new_jobs, base_url)
+    first = new_jobs[0]
     template = {
         "object_type": "text",
         "text": text,
         "link": {
-            "web_url": "http://localhost:5050",
-            "mobile_web_url": "http://localhost:5050",
+            "web_url": first.get("url") or base_url or "https://kakao.com",
+            "mobile_web_url": first.get("url") or base_url or "https://kakao.com",
         },
-        "button_title": "대시보드 열기",
+        "button_title": "자세히 보기",
     }
-
-    r = requests.post(
-        "https://kapi.kakao.com/v2/api/talk/memo/default/send",
-        headers={"Authorization": f"Bearer {access_token}"},
-        data={"template_object": json.dumps(template)},
-    )
-
-    if r.status_code == 401:
-        # 토큰 만료 → 갱신 후 재시도
-        log.info("토큰 만료, 갱신 중...")
-        token_data = refresh_token()
-        access_token = token_data["access_token"]
-        r = requests.post(
-            "https://kapi.kakao.com/v2/api/talk/memo/default/send",
-            headers={"Authorization": f"Bearer {access_token}"},
-            data={"template_object": json.dumps(template)},
-        )
-
-    if r.status_code == 200:
-        log.info("✅ 카카오톡 전송 성공")
-    else:
-        log.error(f"❌ 카카오톡 전송 실패: {r.status_code} {r.text}")
-
-    return r.status_code == 200
-
-
-def send_new_jobs_kakao(jobs):
-    """새 공고 목록을 카카오톡으로 전송"""
-    if not jobs:
-        return
-
-    lines = [f"🔔 OT 채용 새 공고 {len(jobs)}건!\n"]
-
-    for i, job in enumerate(jobs[:5], 1):  # 최대 5건
-        loc = job.get("location", "")
-        src = job.get("source", "")
-        lines.append(f"{i}. [{src}] {job['title']}")
-        if loc:
-            lines.append(f"   📍 {loc}")
-        lines.append("")
-
-    if len(jobs) > 5:
-        lines.append(f"... 외 {len(jobs) - 5}건 더")
-
-    lines.append("\n👉 http://localhost:5050 에서 전체 확인")
-
-    text = "\n".join(lines)
-
-    try:
-        send_to_me(text)
-    except FileNotFoundError:
-        log.warning("카카오 토큰 없음 — 알림 건너뜀 (kakao_auth.py 실행 필요)")
-    except Exception as e:
-        log.error(f"카카오 알림 에러: {e}")
-
-
-if __name__ == "__main__":
-    # 테스트
-    logging.basicConfig(level=logging.INFO)
-    send_to_me("🔔 OT 채용 트래커 테스트 메시지입니다!")
+    send_memo(access, template)
+    log.info(f"발송 완료 → {user.get('nickname', user['kakao_id'])}")

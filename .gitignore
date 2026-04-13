@@ -5,3 +5,5 @@ kakao_token.json
 config.json
 venv/
 .env
+.handoffs/
+.pytest_cache/

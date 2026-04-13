@@ -1,0 +1,12 @@
+__pycache__
+*.pyc
+*.db
+kakao_token.json
+config.json
+venv
+.git
+.gitignore
+README.md
+start.sh
+kakao_auth.py
+web_server.py
