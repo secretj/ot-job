@@ -66,8 +66,34 @@ def init_users_db():
         conn.execute("ALTER TABLE users ADD COLUMN custom_keywords TEXT DEFAULT '[]'")
     if "custom_regions" not in cols:
         conn.execute("ALTER TABLE users ADD COLUMN custom_regions TEXT DEFAULT '[]'")
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS job_reads (
+            kakao_id INTEGER NOT NULL,
+            job_id TEXT NOT NULL,
+            read_at TEXT NOT NULL,
+            PRIMARY KEY (kakao_id, job_id)
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_reads_user ON job_reads(kakao_id)")
     conn.commit()
     conn.close()
+
+
+def mark_job_read(kakao_id, job_id):
+    conn = db()
+    conn.execute(
+        "INSERT OR IGNORE INTO job_reads (kakao_id, job_id, read_at) VALUES (?, ?, ?)",
+        (kakao_id, job_id, datetime.now().isoformat()),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_read_ids(kakao_id):
+    conn = db()
+    rows = conn.execute("SELECT job_id FROM job_reads WHERE kakao_id=?", (kakao_id,)).fetchall()
+    conn.close()
+    return {r["job_id"] for r in rows}
 
 
 def _parse_csv_list(raw):
@@ -219,15 +245,29 @@ def expires_at_from_seconds(sec):
 # ══════════════════════════════════════════
 #  Routes
 # ══════════════════════════════════════════
+def _attach_read_flag(jobs, me):
+    if not me:
+        for j in jobs:
+            j["read"] = False
+        return jobs
+    read_ids = get_read_ids(me["id"])
+    for j in jobs:
+        j["read"] = j["id"] in read_ids
+    return jobs
+
+
 @app.route("/")
 def index():
     me = session.get("user")
     conn = db()
-    jobs = conn.execute(
+    jobs = [dict(j) for j in conn.execute(
         "SELECT * FROM jobs ORDER BY is_new DESC, crawled_at DESC LIMIT 200"
-    ).fetchall()
+    ).fetchall()]
     conn.close()
-    return render_template("index.html", jobs=[dict(j) for j in jobs], me=me)
+    _attach_read_flag(jobs, me)
+    if me:
+        jobs.sort(key=lambda j: (j["read"], not j.get("is_new"), -0))
+    return render_template("index.html", jobs=jobs, me=me)
 
 
 @app.route("/login")
@@ -318,7 +358,9 @@ def health():
 
 @app.route("/api/jobs")
 def api_jobs():
+    me = session.get("user")
     keyword = request.args.get("keyword", "")
+    only_unread = request.args.get("unread") == "1"
     conn = db()
     if keyword:
         q = f"%{keyword}%"
@@ -329,7 +371,22 @@ def api_jobs():
     else:
         rows = conn.execute("SELECT * FROM jobs ORDER BY is_new DESC, crawled_at DESC LIMIT 200").fetchall()
     conn.close()
-    return jsonify([dict(r) for r in rows])
+    jobs = [dict(r) for r in rows]
+    _attach_read_flag(jobs, me)
+    if me:
+        if only_unread:
+            jobs = [j for j in jobs if not j["read"]]
+        jobs.sort(key=lambda j: (j["read"], not j.get("is_new")))
+    return jsonify(jobs)
+
+
+@app.route("/api/jobs/<job_id>/read", methods=["POST"])
+def api_mark_read(job_id):
+    me = session.get("user")
+    if not me:
+        return jsonify({"error": "로그인 필요"}), 401
+    mark_job_read(me["id"], job_id)
+    return jsonify({"ok": True})
 
 
 @app.route("/api/stats")
@@ -339,9 +396,17 @@ def api_stats():
     new_ = conn.execute("SELECT COUNT(*) FROM jobs WHERE is_new=1").fetchone()[0]
     fulltime = conn.execute("SELECT COUNT(*) FROM jobs WHERE job_type LIKE '%정규%'").fetchone()[0]
     logs = conn.execute("SELECT * FROM crawl_log ORDER BY id DESC LIMIT 10").fetchall()
+    me = session.get("user")
+    unread = None
+    if me:
+        unread = conn.execute(
+            "SELECT COUNT(*) FROM jobs WHERE id NOT IN (SELECT job_id FROM job_reads WHERE kakao_id=?)",
+            (me["id"],),
+        ).fetchone()[0]
     conn.close()
     return jsonify({
         "total": total, "new": new_, "fulltime": fulltime,
+        "unread": unread,
         "recent_logs": [dict(r) for r in logs],
     })
 

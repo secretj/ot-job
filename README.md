@@ -82,6 +82,8 @@
 | `/api/stats` | GET | 전체·신규·정규직 카운트 |
 | `/api/crawl_now` | POST | 즉시 수집 (백그라운드 스레드) |
 | `/api/crawl_status` | GET | 수집 진행 여부 |
+| `/api/jobs/<id>/read` | POST | 해당 공고 읽음 처리 (로그인 필요) |
+| `/api/jobs?unread=1` | GET | 내가 안 읽은 공고만 (로그인 필요) |
 
 ---
 

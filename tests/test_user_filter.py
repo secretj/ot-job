@@ -7,9 +7,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import os
+import tempfile
 os.environ.setdefault("KAKAO_REST_API_KEY", "test")
 os.environ.setdefault("KAKAO_REDIRECT_URI", "http://localhost/cb")
 os.environ.setdefault("ENABLE_SCHEDULER", "0")
+os.environ.setdefault("DB_PATH", tempfile.NamedTemporaryFile(suffix=".db", delete=False).name)
 
 import crawler
 import app as app_mod

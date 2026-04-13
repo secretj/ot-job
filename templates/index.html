@@ -34,6 +34,9 @@ body{font-family:var(--f);background:var(--bg);color:var(--tx);min-height:100vh}
 .card{background:var(--s1);border:1px solid var(--bd);border-radius:var(--r);padding:16px;margin-bottom:10px;transition:.15s}
 .card:hover{border-color:var(--ac);background:var(--s2)}
 .card.is-new{border-left:3px solid var(--ac)}
+.card.read{opacity:.55}
+.card.read .card-title{font-weight:500;color:var(--dm)}
+.read-badge{font-size:10px;color:var(--dm);background:var(--s2);padding:2px 8px;border-radius:4px}
 .card-top{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
 .src{font-size:10px;font-weight:700;padding:2px 8px;border-radius:5px}
 .src-사람인{background:#1a2a3a;color:#48f}.src-잡코리아{background:#2a1a2a;color:#f69}.src-Indeed{background:#1a1a2a;color:#6c5ce7}
@@ -83,10 +86,12 @@ body{font-family:var(--f);background:var(--bg);color:var(--tx);min-height:100vh}
     <div class="stat"><div class="stat-label">전체 공고</div><div class="stat-val green" id="stTotal">-</div></div>
     <div class="stat"><div class="stat-label">신규 (NEW)</div><div class="stat-val pink" id="stNew">-</div></div>
     <div class="stat"><div class="stat-label">정규직</div><div class="stat-val blue" id="stFull">-</div></div>
+    {% if me %}<div class="stat"><div class="stat-label">안 읽음</div><div class="stat-val pink" id="stUnread">-</div></div>{% endif %}
   </div>
 
   <div class="filters">
     <div class="fbtn on" data-f="" onclick="setFilter('')">전체</div>
+    {% if me %}<div class="fbtn" id="unreadToggle" onclick="toggleUnread()">안 읽음만</div>{% endif %}
     <div class="fbtn" data-f="정규직" onclick="setFilter('정규직')">정규직</div>
     <div class="fbtn" data-f="작업치료" onclick="setFilter('작업치료')">작업치료</div>
     <div class="fbtn" data-f="감각통합" onclick="setFilter('감각통합')">감각통합</div>
@@ -104,13 +109,28 @@ body{font-family:var(--f);background:var(--bg);color:var(--tx);min-height:100vh}
 
 <script>
 let currentFilter = '';
+let unreadOnly = false;
+const LOGGED_IN = {{ 'true' if me else 'false' }};
 
 async function loadJobs() {
   const params = new URLSearchParams();
   if (currentFilter) params.set('keyword', currentFilter);
+  if (unreadOnly) params.set('unread', '1');
   const r = await fetch('/api/jobs?' + params);
   const jobs = await r.json();
   renderJobs(jobs);
+}
+
+function toggleUnread() {
+  unreadOnly = !unreadOnly;
+  document.getElementById('unreadToggle').classList.toggle('on', unreadOnly);
+  loadJobs();
+}
+
+async function markRead(jobId) {
+  if (!LOGGED_IN) return;
+  try { await fetch(`/api/jobs/${encodeURIComponent(jobId)}/read`, { method: 'POST' }); } catch (e) {}
+  setTimeout(() => { loadJobs(); loadStats(); }, 300);
 }
 
 async function loadStats() {
@@ -119,6 +139,10 @@ async function loadStats() {
   document.getElementById('stTotal').textContent = d.total;
   document.getElementById('stNew').textContent = d.new;
   document.getElementById('stFull').textContent = d.fulltime;
+  if (LOGGED_IN && d.unread != null) {
+    const el = document.getElementById('stUnread');
+    if (el) el.textContent = d.unread;
+  }
   renderLogs(d.recent_logs);
 }
 
@@ -129,10 +153,10 @@ function renderJobs(jobs) {
     return;
   }
   el.innerHTML = jobs.map((j, i) => `
-    <div class="card ${j.is_new ? 'is-new' : ''}" style="animation-delay:${i * 0.03}s">
+    <div class="card ${j.is_new && !j.read ? 'is-new' : ''} ${j.read ? 'read' : ''}" style="animation-delay:${i * 0.03}s">
       <div class="card-top">
         <span class="src src-${j.source}">${j.source}</span>
-        ${j.is_new ? '<span class="new-badge">NEW</span>' : ''}
+        ${j.read ? '<span class="read-badge">읽음</span>' : (j.is_new ? '<span class="new-badge">NEW</span>' : '')}
       </div>
       <div class="card-title">${esc(j.title)}</div>
       ${j.org ? `<div class="card-org">🏥 ${esc(j.org)}</div>` : ''}
@@ -143,7 +167,7 @@ function renderJobs(jobs) {
       </div>
       <div class="card-btm">
         <span class="card-date">${j.crawled_at ? j.crawled_at.slice(0, 16) : ''}</span>
-        ${/^https?:\/\//.test(j.url) ? `<a class="card-link" href="${esc(j.url)}" target="_blank" rel="noopener">공고 보기 →</a>` : `<span class="card-date">🔗 링크 없음</span>`}
+        ${/^https?:\/\//.test(j.url) ? `<a class="card-link" href="${esc(j.url)}" target="_blank" rel="noopener" onclick="markRead('${esc(j.id)}')">공고 보기 →</a>` : `<span class="card-date">🔗 링크 없음</span>`}
       </div>
     </div>
   `).join('');
