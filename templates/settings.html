@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>설정 · OT 채용 트래커</title>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700;900&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#0c0c12;--s1:#14141e;--s2:#1c1c2a;--bd:#282840;--tx:#e4e4f0;--dm:#7878a0;--ac:#00e09e;--bl:#4d9fff;--r:12px;--f:'Noto Sans KR',sans-serif}
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:var(--f);background:var(--bg);color:var(--tx);min-height:100vh}
+.wrap{max-width:720px;margin:0 auto;padding:20px}
+.hdr{display:flex;justify-content:space-between;align-items:center;margin-bottom:24px}
+.logo{font-size:20px;font-weight:900;background:linear-gradient(135deg,var(--ac),var(--bl));-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+a.btn,button.btn{padding:8px 16px;background:linear-gradient(135deg,var(--ac),var(--bl));color:var(--bg);border:none;border-radius:var(--r);font-family:var(--f);font-weight:700;cursor:pointer;text-decoration:none;font-size:13px;display:inline-block}
+.card{background:var(--s1);border:1px solid var(--bd);border-radius:var(--r);padding:20px;margin-bottom:14px}
+h2{font-size:16px;margin-bottom:8px}
+p.desc{font-size:12px;color:var(--dm);margin-bottom:12px;line-height:1.5}
+label{display:block;font-size:13px;font-weight:700;margin:14px 0 6px}
+textarea{width:100%;min-height:80px;background:var(--s2);border:1px solid var(--bd);border-radius:8px;padding:10px;color:var(--tx);font-family:var(--f);font-size:13px;resize:vertical}
+textarea:focus{outline:none;border-color:var(--ac)}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
+.chip{font-size:11px;padding:3px 9px;border-radius:20px;background:var(--s2);color:var(--dm);border:1px solid var(--bd)}
+.note{font-size:11px;color:var(--dm);margin-top:4px}
+.actions{margin-top:18px;display:flex;gap:8px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="hdr">
+    <div class="logo">⚙️ 내 설정</div>
+    <a class="btn" href="/">← 대시보드</a>
+  </div>
+
+  <div class="card">
+    <h2>맞춤 키워드 · 지역</h2>
+    <p class="desc">
+      기본 키워드/지역에 <b>내가 추가한 항목</b>을 더해 필터링합니다.<br>
+      수집 결과는 모든 사용자가 함께 보고, 카카오 알림은 내 설정에 맞는 것만 받습니다.
+    </p>
+
+    <form method="POST">
+      <label>추가 키워드 (콤마 또는 줄바꿈 구분)</label>
+      <textarea name="keywords" placeholder="예: 방문재활, 소아작업치료, 노인복지관">{{ keywords }}</textarea>
+      <div class="note">기본 키워드:</div>
+      <div class="chips">{% for k in default_keywords %}<span class="chip">{{ k }}</span>{% endfor %}</div>
+
+      <label>추가 지역 (콤마 또는 줄바꿈 구분)</label>
+      <textarea name="regions" placeholder="예: 경기, 인천, 성남">{{ regions }}</textarea>
+      <div class="note">기본 지역:</div>
+      <div class="chips">{% for r in default_regions %}<span class="chip">{{ r }}</span>{% endfor %}</div>
+
+      <div class="actions">
+        <button class="btn" type="submit">저장</button>
+      </div>
+    </form>
+  </div>
+</div>
+</body>
+</html>

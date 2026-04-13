@@ -32,11 +32,12 @@
 
 ## 수집 정책 (현재)
 
-### 키워드 필터 (`crawler.py:KEYWORDS`)
-`작업치료`, `감각통합`, `OT `, `인지치료`, `요양병원` 중 하나 포함.
+### 키워드 필터 (`crawler.py:DEFAULT_KEYWORDS` + 유저 맞춤)
+기본: `작업치료`, `감각통합`, `OT `, `인지치료`, `요양병원`
+유저가 `/settings`에서 추가한 키워드는 수집 시 합집합으로 반영되고, 알림은 내 설정에 맞는 공고만 발송.
 
-### 지역 필터 (`crawler.py:SEOUL_FILTER`)
-`서울` 포함 (사람인/잡코리아 한정, 특화 게시판은 지역정보 없어 "전국/미상" 태그).
+### 지역 필터 (`crawler.py:DEFAULT_REGIONS` + 유저 맞춤)
+기본: `서울`. 유저별로 추가 가능. 특화 게시판은 지역정보 없어 "전국/미상" 태그로 통과.
 
 ### 정규직 분류 (`crawler.py:classify_job_type`)
 | 조건 | 결과 |
@@ -75,6 +76,7 @@
 | `/kakao/callback` | GET | OAuth 콜백, 유저 저장 |
 | `/logout` | GET | 세션 종료 |
 | `/subscribe` · `/unsubscribe` | POST | 알림 ON/OFF (로그인 필요) |
+| `/settings` | GET/POST | 내 맞춤 키워드·지역 설정 (로그인 필요) |
 | `/health` | GET | 헬스체크 |
 | `/api/jobs?keyword=` | GET | 공고 목록 JSON |
 | `/api/stats` | GET | 전체·신규·정규직 카운트 |

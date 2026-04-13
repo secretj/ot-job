@@ -112,20 +112,42 @@ def log_crawl(conn, source, found, new_count, status="ok"):
 #  크롤러들
 # ══════════════════════════════════════════
 
-KEYWORDS = ["작업치료", "감각통합", "OT ", "인지치료", "요양병원"]
-SEOUL_FILTER = ["서울"]
+DEFAULT_KEYWORDS = ["작업치료", "감각통합", "OT ", "인지치료", "요양병원"]
+DEFAULT_REGIONS = ["서울"]
+
+# 런타임에 app.py가 유저 커스텀과 합쳐 주입. 비어있으면 DEFAULT 사용.
+EXTRA_KEYWORDS: list = []
+EXTRA_REGIONS: list = []
+
+# 호환용 별칭
+KEYWORDS = DEFAULT_KEYWORDS
+SEOUL_FILTER = DEFAULT_REGIONS
 
 # 정규직 판별 정책
 FULLTIME_TOKENS = ["정규직"]
 NON_FULLTIME_TOKENS = ["계약직", "파트타임", "파트", "아르바이트", "알바", "인턴", "프리랜서", "일용직"]
 
 
+def effective_keywords():
+    return DEFAULT_KEYWORDS + EXTRA_KEYWORDS
+
+
+def effective_regions():
+    return DEFAULT_REGIONS + EXTRA_REGIONS
+
+
 def is_seoul(text):
-    return any(k in text for k in SEOUL_FILTER)
+    return any(k in text for k in effective_regions())
 
 
-def matches_keyword(text):
-    return any(k in text for k in KEYWORDS)
+def matches_region(text, regions=None):
+    src = regions if regions is not None else effective_regions()
+    return any(k in text for k in src)
+
+
+def matches_keyword(text, keywords=None):
+    src = keywords if keywords is not None else effective_keywords()
+    return any(k in text for k in src)
 
 
 OPEN_ENDED_MARKERS = ["상시", "수시", "채용시", "채용 시", "충원시", "충원 시", "연중"]

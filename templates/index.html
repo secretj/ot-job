@@ -70,6 +70,7 @@ body{font-family:var(--f);background:var(--bg);color:var(--tx);min-height:100vh}
       <button class="crawl-btn" id="crawlBtn" onclick="crawlNow()">🔍 지금 수집</button>
       {% if me %}
         <span style="font-size:12px;color:var(--dm)">👤 {{ me.nickname or me.id }}</span>
+        <a class="crawl-btn" style="text-decoration:none;display:inline-block" href="/settings">⚙️ 설정</a>
         <button class="crawl-btn" onclick="toggleSub()">알림 토글</button>
         <a class="crawl-btn" style="text-decoration:none;display:inline-block" href="/logout">로그아웃</a>
       {% else %}

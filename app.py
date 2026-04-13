@@ -55,11 +55,84 @@ def init_users_db():
             refresh_token TEXT,
             expires_at TEXT,
             enabled INTEGER DEFAULT 1,
-            created_at TEXT
+            created_at TEXT,
+            custom_keywords TEXT DEFAULT '[]',
+            custom_regions TEXT DEFAULT '[]'
         )
     """)
+    # 기존 DB 마이그레이션
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(users)").fetchall()}
+    if "custom_keywords" not in cols:
+        conn.execute("ALTER TABLE users ADD COLUMN custom_keywords TEXT DEFAULT '[]'")
+    if "custom_regions" not in cols:
+        conn.execute("ALTER TABLE users ADD COLUMN custom_regions TEXT DEFAULT '[]'")
     conn.commit()
     conn.close()
+
+
+def _parse_csv_list(raw):
+    """콤마/줄바꿈 구분된 문자열 → 정제된 리스트."""
+    if not raw:
+        return []
+    items = []
+    for token in raw.replace("\n", ",").split(","):
+        t = token.strip()
+        if t and t not in items:
+            items.append(t)
+    return items
+
+
+def get_user_customs():
+    """모든 활성 유저의 custom_keywords/regions 합집합 반환."""
+    conn = db()
+    rows = conn.execute("SELECT custom_keywords, custom_regions FROM users WHERE enabled=1").fetchall()
+    conn.close()
+    kws, regs = set(), set()
+    for r in rows:
+        try:
+            kws.update(json.loads(r["custom_keywords"] or "[]"))
+            regs.update(json.loads(r["custom_regions"] or "[]"))
+        except Exception:
+            pass
+    return sorted(kws), sorted(regs)
+
+
+def set_user_settings(kakao_id, keywords, regions):
+    conn = db()
+    conn.execute(
+        "UPDATE users SET custom_keywords=?, custom_regions=? WHERE kakao_id=?",
+        (json.dumps(keywords, ensure_ascii=False), json.dumps(regions, ensure_ascii=False), kakao_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_user(kakao_id):
+    conn = db()
+    row = conn.execute("SELECT * FROM users WHERE kakao_id=?", (kakao_id,)).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def job_matches_user(job, user):
+    """유저의 (default ∪ custom) 키워드·지역에 해당하면 True."""
+    try:
+        user_kw = json.loads(user.get("custom_keywords") or "[]")
+        user_rg = json.loads(user.get("custom_regions") or "[]")
+    except Exception:
+        user_kw, user_rg = [], []
+    kws = crawler.DEFAULT_KEYWORDS + user_kw
+    regs = crawler.DEFAULT_REGIONS + user_rg
+    full_text = f"{job.get('title','')} {job.get('org','')} {job.get('location','')}"
+    # 키워드 매칭 필수
+    if not any(k in full_text for k in kws):
+        return False
+    # 지역: location이 "전국/미상"이면 통과 (게시판류), 아니면 매칭 확인
+    loc = job.get("location", "")
+    if loc and "전국" not in loc and "미상" not in loc:
+        if not any(r in (loc + " " + full_text) for r in regs):
+            return False
+    return True
 
 
 def upsert_user(kakao_id, nickname, access_token, refresh_token, expires_at):
@@ -210,6 +283,34 @@ def subscribe():
     return jsonify({"ok": True})
 
 
+@app.route("/settings", methods=["GET", "POST"])
+def settings():
+    me = session.get("user")
+    if not me:
+        return redirect(url_for("login"))
+    user = get_user(me["id"])
+    if not user:
+        return redirect(url_for("logout"))
+    if request.method == "POST":
+        kws = _parse_csv_list(request.form.get("keywords", ""))
+        regs = _parse_csv_list(request.form.get("regions", ""))
+        set_user_settings(me["id"], kws, regs)
+        return redirect(url_for("settings"))
+    try:
+        kws = json.loads(user.get("custom_keywords") or "[]")
+        regs = json.loads(user.get("custom_regions") or "[]")
+    except Exception:
+        kws, regs = [], []
+    return render_template(
+        "settings.html",
+        me=me,
+        keywords=", ".join(kws),
+        regions=", ".join(regs),
+        default_keywords=crawler.DEFAULT_KEYWORDS,
+        default_regions=crawler.DEFAULT_REGIONS,
+    )
+
+
 @app.route("/health")
 def health():
     return "ok"
@@ -278,18 +379,27 @@ def api_crawl_status():
 #  스케줄러
 # ══════════════════════════════════════════
 def run_crawl_and_notify():
+    extra_kw, extra_rg = get_user_customs()
+    crawler.EXTRA_KEYWORDS = list(extra_kw)
+    crawler.EXTRA_REGIONS = list(extra_rg)
     try:
         new_jobs = crawler.run_crawl()
     except Exception as e:
         log.exception(f"크롤링 실패: {e}")
         return
+    finally:
+        crawler.EXTRA_KEYWORDS = []
+        crawler.EXTRA_REGIONS = []
     if not new_jobs:
         return
     users = get_enabled_users()
-    log.info(f"신규 {len(new_jobs)}건 → {len(users)}명에게 발송")
+    log.info(f"신규 {len(new_jobs)}건 → {len(users)}명 대상 필터링/발송")
     for u in users:
+        matched = [j for j in new_jobs if job_matches_user(j, u)]
+        if not matched:
+            continue
         try:
-            kakao_notify.send_new_jobs_for_user(u, new_jobs, on_token_refresh=update_tokens)
+            kakao_notify.send_new_jobs_for_user(u, matched, on_token_refresh=update_tokens)
         except Exception as e:
             log.warning(f"발송 실패 user={u['kakao_id']}: {e}")
 
