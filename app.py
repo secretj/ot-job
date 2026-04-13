@@ -245,6 +245,32 @@ def expires_at_from_seconds(sec):
 # ══════════════════════════════════════════
 #  Routes
 # ══════════════════════════════════════════
+def _group_duplicates(jobs):
+    """org+title 정규화 키로 같은 공고를 묶는다.
+    각 그룹은 대표 job 한 건 + sources=[{source,url,id}] 리스트."""
+    groups = {}
+    order = []
+    for j in jobs:
+        key = crawler.dedup_key(j.get("org", ""), j.get("title", ""))
+        if key not in groups:
+            groups[key] = dict(j)
+            groups[key]["sources"] = []
+            groups[key]["dup_count"] = 0
+            order.append(key)
+        g = groups[key]
+        g["sources"].append({"source": j.get("source"), "url": j.get("url"), "id": j.get("id")})
+        g["dup_count"] += 1
+        # 대표는 is_new 우선, 그 다음 최신 crawled_at
+        if (j.get("is_new") and not g.get("is_new")) or (
+            j.get("is_new") == g.get("is_new") and (j.get("crawled_at") or "") > (g.get("crawled_at") or "")
+        ):
+            for f in ("id", "source", "url", "crawled_at", "is_new", "deadline", "job_type", "location"):
+                g[f] = j.get(f)
+        # 그룹 전체 "read"는 전 멤버가 읽힌 경우에만
+        g["read"] = g.get("read", True) and j.get("read", False)
+    return [groups[k] for k in order]
+
+
 def _attach_read_flag(jobs, me):
     if not me:
         for j in jobs:
@@ -265,8 +291,9 @@ def index():
     ).fetchall()]
     conn.close()
     _attach_read_flag(jobs, me)
+    jobs = _group_duplicates(jobs)
     if me:
-        jobs.sort(key=lambda j: (j["read"], not j.get("is_new"), -0))
+        jobs.sort(key=lambda j: (j["read"], not j.get("is_new")))
     return render_template("index.html", jobs=jobs, me=me)
 
 
@@ -373,6 +400,7 @@ def api_jobs():
     conn.close()
     jobs = [dict(r) for r in rows]
     _attach_read_flag(jobs, me)
+    jobs = _group_duplicates(jobs)
     if me:
         if only_unread:
             jobs = [j for j in jobs if not j["read"]]
@@ -385,8 +413,19 @@ def api_mark_read(job_id):
     me = session.get("user")
     if not me:
         return jsonify({"error": "로그인 필요"}), 401
-    mark_job_read(me["id"], job_id)
-    return jsonify({"ok": True})
+    conn = db()
+    row = conn.execute("SELECT org, title FROM jobs WHERE id=?", (job_id,)).fetchone()
+    if not row:
+        conn.close()
+        mark_job_read(me["id"], job_id)
+        return jsonify({"ok": True})
+    target_key = crawler.dedup_key(row["org"], row["title"])
+    all_rows = conn.execute("SELECT id, org, title FROM jobs").fetchall()
+    conn.close()
+    matching = [r["id"] for r in all_rows if crawler.dedup_key(r["org"], r["title"]) == target_key]
+    for jid in matching:
+        mark_job_read(me["id"], jid)
+    return jsonify({"ok": True, "marked": len(matching)})
 
 
 @app.route("/api/stats")

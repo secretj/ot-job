@@ -43,6 +43,21 @@ def headers():
         "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8",
     }
 
+_DEDUP_STRIP_RE = re.compile(r"[\s\[\]\(\)\-_/·•,.!~]+")
+_DEDUP_NOISE = ("채용", "모집", "공고", "정규직", "경력", "신입", "수시")
+
+
+def dedup_key(org, title):
+    """org+title 정규화해 출처가 다른 중복 공고를 같은 키로."""
+    o = (org or "").strip().lower()
+    t = (title or "").lower()
+    for n in _DEDUP_NOISE:
+        t = t.replace(n, "")
+    t = _DEDUP_STRIP_RE.sub("", t)
+    o = _DEDUP_STRIP_RE.sub("", o)
+    return f"{o}::{t}"
+
+
 def make_id(title, source):
     raw = f"{source}:{title}".encode()
     return hashlib.md5(raw).hexdigest()[:16]

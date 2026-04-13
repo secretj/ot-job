@@ -155,7 +155,10 @@ function renderJobs(jobs) {
   el.innerHTML = jobs.map((j, i) => `
     <div class="card ${j.is_new && !j.read ? 'is-new' : ''} ${j.read ? 'read' : ''}" style="animation-delay:${i * 0.03}s">
       <div class="card-top">
-        <span class="src src-${j.source}">${j.source}</span>
+        <div style="display:flex;gap:4px;flex-wrap:wrap">
+          ${(j.sources || [{source:j.source,url:j.url,id:j.id}]).map(s => `<span class="src src-${s.source}">${esc(s.source)}</span>`).join('')}
+          ${j.dup_count > 1 ? `<span class="read-badge">+${j.dup_count - 1}중복</span>` : ''}
+        </div>
         ${j.read ? '<span class="read-badge">읽음</span>' : (j.is_new ? '<span class="new-badge">NEW</span>' : '')}
       </div>
       <div class="card-title">${esc(j.title)}</div>
