@@ -84,6 +84,9 @@ def init_db():
 
 def insert_job(conn, job):
     """새 공고면 True, 기존이면 False"""
+    url = job.get("url", "")
+    if not url or not url.startswith(("http://", "https://")):
+        return False
     cur = conn.execute("SELECT id FROM jobs WHERE id = ?", (job["id"],))
     if cur.fetchone():
         return False
@@ -107,14 +110,49 @@ def log_crawl(conn, source, found, new_count, status="ok"):
 #  크롤러들
 # ══════════════════════════════════════════
 
-KEYWORDS = ["작업치료", "감각통합", "OT ", "인지치료"]
+KEYWORDS = ["작업치료", "감각통합", "OT ", "인지치료", "요양병원"]
 SEOUL_FILTER = ["서울"]
+
+# 정규직 판별 정책
+FULLTIME_TOKENS = ["정규직"]
+NON_FULLTIME_TOKENS = ["계약직", "파트타임", "파트", "아르바이트", "알바", "인턴", "프리랜서", "일용직"]
+
 
 def is_seoul(text):
     return any(k in text for k in SEOUL_FILTER)
 
+
 def matches_keyword(text):
     return any(k in text for k in KEYWORDS)
+
+
+def normalize_url(href, base):
+    """href 정제. 유효한 절대 URL이면 반환, 아니면 None."""
+    if not href:
+        return None
+    h = href.strip()
+    if h.lower().startswith(("javascript:", "mailto:", "#")):
+        return None
+    if h.startswith("http://") or h.startswith("https://"):
+        return h
+    if h.startswith("/"):
+        return base.rstrip("/") + h
+    return None
+
+
+def classify_job_type(raw, full_text=""):
+    """
+    job_type 분류:
+      - "정규직" (확실한 정규직)
+      - "미확인" (불명)
+      - None (계약직 등 명확히 비정규직 → 버림)
+    """
+    combined = f"{raw} {full_text}"
+    if any(t in combined for t in NON_FULLTIME_TOKENS):
+        return None
+    if any(t in combined for t in FULLTIME_TOKENS):
+        return "정규직"
+    return "미확인"
 
 
 # ── 사람인 ──
@@ -147,6 +185,9 @@ def crawl_saramin():
             full_text = f"{title} {org} {location}"
             if not (is_seoul(full_text) and matches_keyword(full_text)):
                 continue
+            jt = classify_job_type(job_type, full_text)
+            if jt is None:
+                continue
 
             jobs.append({
                 "id": make_id(title + org, "saramin"),
@@ -154,7 +195,7 @@ def crawl_saramin():
                 "title": title,
                 "org": org,
                 "location": location,
-                "job_type": job_type,
+                "job_type": jt,
                 "deadline": deadline,
                 "url": link,
             })
@@ -197,6 +238,9 @@ def crawl_jobkorea():
             full_text = f"{title} {org} {location}"
             if not (is_seoul(full_text) and matches_keyword(full_text)):
                 continue
+            jt = classify_job_type("", full_text)
+            if jt is None:
+                continue
 
             jobs.append({
                 "id": make_id(title + org, "jobkorea"),
@@ -204,7 +248,7 @@ def crawl_jobkorea():
                 "title": title,
                 "org": org,
                 "location": location,
-                "job_type": "",
+                "job_type": jt,
                 "deadline": "",
                 "url": link,
             })
@@ -243,6 +287,9 @@ def crawl_indeed():
             full_text = f"{title} {org} {location}"
             if not matches_keyword(full_text):
                 continue
+            jt = classify_job_type("", full_text)
+            if jt is None:
+                continue
 
             jobs.append({
                 "id": make_id(title + org, "indeed"),
@@ -250,7 +297,7 @@ def crawl_indeed():
                 "title": title,
                 "org": org,
                 "location": location if location else "서울",
-                "job_type": "",
+                "job_type": jt,
                 "deadline": "",
                 "url": link,
             })
@@ -277,8 +324,13 @@ def crawl_thankyouot():
                 continue
             title = link_el.get_text(strip=True)
             href = link_el.get("href", "")
-            if href and not href.startswith("http"):
-                href = "https://thankyouot.com" + href
+            if not href or href.lower().startswith(("javascript:", "mailto:", "#")):
+                continue
+            if not href.startswith("http"):
+                if href.startswith("/"):
+                    href = "https://thankyouot.com" + href
+                else:
+                    continue
 
             # 서울 관련이거나 키워드 매칭
             if not matches_keyword(title):
@@ -286,13 +338,16 @@ def crawl_thankyouot():
             # 땡큐오티는 지역 구분이 없으므로 제목에서 서울 판별 시도
             location = "서울" if is_seoul(title) else "전국/미상"
 
+            jt = classify_job_type("", title)
+            if jt is None:
+                continue
             jobs.append({
                 "id": make_id(title, "thankyouot"),
                 "source": source,
                 "title": title,
                 "org": "",
                 "location": location,
-                "job_type": "",
+                "job_type": jt,
                 "deadline": "",
                 "url": href,
             })
@@ -319,18 +374,26 @@ def crawl_kaotmh():
 
             if not any(k in title for k in ["채용", "구인", "모집", "공고"]):
                 continue
-            if href and not href.startswith("http"):
-                href = "http://www.kaotmh.org" + href
+            if not href or href.lower().startswith(("javascript:", "mailto:", "#")):
+                continue
+            if not href.startswith("http"):
+                if href.startswith("/"):
+                    href = "http://www.kaotmh.org" + href
+                else:
+                    continue
 
             location = "서울" if is_seoul(title) else "전국/미상"
 
+            jt = classify_job_type("", title)
+            if jt is None:
+                continue
             jobs.append({
                 "id": make_id(title, "kaotmh"),
                 "source": source,
                 "title": title,
                 "org": "",
                 "location": location,
-                "job_type": "",
+                "job_type": jt,
                 "deadline": "",
                 "url": href,
             })
