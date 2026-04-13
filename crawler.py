@@ -4,13 +4,15 @@ OT 채용 트래커 - 크롤러
 서울 지역 작업치료사 / 감각통합치료사 채용 공고 수집
 """
 
+import os
 import sqlite3
 import time
 import json
+import re
 import random
 import hashlib
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, date, timedelta
 from pathlib import Path
 
 import requests
@@ -126,6 +128,70 @@ def matches_keyword(text):
     return any(k in text for k in KEYWORDS)
 
 
+OPEN_ENDED_MARKERS = ["상시", "수시", "채용시", "채용 시", "충원시", "충원 시", "연중"]
+
+
+def parse_deadline(text, today=None):
+    """
+    마감일 문자열 파싱.
+    반환:
+      - date: 파싱된 마감일 (해당일까지 유효)
+      - None: 파싱 불가 또는 상시/수시 (만료 취급 X)
+    """
+    if not text:
+        return None
+    t = text.strip()
+    if any(m in t for m in OPEN_ENDED_MARKERS):
+        return None
+
+    today = today or date.today()
+
+    # "D-5", "D-0"
+    m = re.search(r"[dD]\s*-\s*(\d+)", t)
+    if m:
+        return today + timedelta(days=int(m.group(1)))
+    if "오늘마감" in t:
+        return today
+    if "내일마감" in t:
+        return today + timedelta(days=1)
+
+    # "2026-11-15", "2026.11.15", "2026/11/15"
+    m = re.search(r"(20\d{2})[.\-/](\d{1,2})[.\-/](\d{1,2})", t)
+    if m:
+        try:
+            return date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+        except ValueError:
+            return None
+
+    # "11/15", "~11/15", "11.15"
+    m = re.search(r"(\d{1,2})[./](\d{1,2})", t)
+    if m:
+        month, day = int(m.group(1)), int(m.group(2))
+        if 1 <= month <= 12 and 1 <= day <= 31:
+            y = today.year
+            try:
+                candidate = date(y, month, day)
+            except ValueError:
+                return None
+            # 오늘보다 6개월 이상 과거면 다음 해로
+            if (today - candidate).days > 180:
+                try:
+                    candidate = date(y + 1, month, day)
+                except ValueError:
+                    return None
+            return candidate
+
+    return None
+
+
+def is_expired(deadline_text, today=None):
+    """파싱 가능하고 오늘보다 과거면 True. 나머지는 False."""
+    d = parse_deadline(deadline_text, today=today)
+    if d is None:
+        return False
+    return d < (today or date.today())
+
+
 def normalize_url(href, base):
     """href 정제. 유효한 절대 URL이면 반환, 아니면 None."""
     if not href:
@@ -155,50 +221,73 @@ def classify_job_type(raw, full_text=""):
     return "미확인"
 
 
+MAX_PAGES = int(os.environ.get("CRAWL_MAX_PAGES", "5"))
+
+
 # ── 사람인 ──
 def crawl_saramin():
     source = "사람인"
     jobs = []
-    url = "https://www.saramin.co.kr/zf_user/search?searchType=search&searchword=%EC%84%9C%EC%9A%B8+%EC%9E%91%EC%97%85%EC%B9%98%EB%A3%8C%EC%82%AC&panel_type=&search_optional_item=y&search_done=y&panel_count=y&preview=y"
+    seen = set()
+    base = "https://www.saramin.co.kr/zf_user/search?searchType=search&searchword=%EC%84%9C%EC%9A%B8+%EC%9E%91%EC%97%85%EC%B9%98%EB%A3%8C%EC%82%AC&panel_type=&search_optional_item=y&search_done=y&panel_count=y&preview=y"
+
     try:
-        r = requests.get(url, headers=headers(), timeout=15)
-        r.raise_for_status()
-        soup = BeautifulSoup(r.text, "lxml")
+        for page in range(1, MAX_PAGES + 1):
+            url = f"{base}&recruitPage={page}"
+            r = requests.get(url, headers=headers(), timeout=15)
+            r.raise_for_status()
+            soup = BeautifulSoup(r.text, "lxml")
+            items = soup.select(".item_recruit")
+            if not items:
+                break
 
-        for item in soup.select(".item_recruit"):
-            title_el = item.select_one(".job_tit a")
-            if not title_el:
-                continue
-            title = title_el.get_text(strip=True)
-            link = "https://www.saramin.co.kr" + title_el.get("href", "")
+            page_added = 0
+            for item in items:
+                title_el = item.select_one(".job_tit a")
+                if not title_el:
+                    continue
+                title = title_el.get_text(strip=True)
+                link = "https://www.saramin.co.kr" + title_el.get("href", "")
 
-            corp_el = item.select_one(".corp_name a")
-            org = corp_el.get_text(strip=True) if corp_el else ""
+                corp_el = item.select_one(".corp_name a")
+                org = corp_el.get_text(strip=True) if corp_el else ""
 
-            conditions = [el.get_text(strip=True) for el in item.select(".job_condition span")]
-            location = conditions[0] if conditions else ""
-            job_type = conditions[2] if len(conditions) > 2 else ""
+                conditions = [el.get_text(strip=True) for el in item.select(".job_condition span")]
+                location = conditions[0] if conditions else ""
+                job_type = conditions[2] if len(conditions) > 2 else ""
 
-            deadline_el = item.select_one(".job_date .date")
-            deadline = deadline_el.get_text(strip=True) if deadline_el else ""
+                deadline_el = item.select_one(".job_date .date")
+                deadline = deadline_el.get_text(strip=True) if deadline_el else ""
+                if is_expired(deadline):
+                    continue
 
-            full_text = f"{title} {org} {location}"
-            if not (is_seoul(full_text) and matches_keyword(full_text)):
-                continue
-            jt = classify_job_type(job_type, full_text)
-            if jt is None:
-                continue
+                full_text = f"{title} {org} {location}"
+                if not (is_seoul(full_text) and matches_keyword(full_text)):
+                    continue
+                jt = classify_job_type(job_type, full_text)
+                if jt is None:
+                    continue
 
-            jobs.append({
-                "id": make_id(title + org, "saramin"),
-                "source": source,
-                "title": title,
-                "org": org,
-                "location": location,
-                "job_type": jt,
-                "deadline": deadline,
-                "url": link,
-            })
+                job_id = make_id(title + org, "saramin")
+                if job_id in seen:
+                    continue
+                seen.add(job_id)
+
+                jobs.append({
+                    "id": job_id,
+                    "source": source,
+                    "title": title,
+                    "org": org,
+                    "location": location,
+                    "job_type": jt,
+                    "deadline": deadline,
+                    "url": link,
+                })
+                page_added += 1
+
+            if page_added == 0:
+                break
+            polite_sleep()
     except Exception as e:
         log.error(f"[사람인] 크롤링 실패: {e}")
         return jobs, str(e)
@@ -210,48 +299,63 @@ def crawl_saramin():
 def crawl_jobkorea():
     source = "잡코리아"
     jobs = []
-    url = "https://www.jobkorea.co.kr/Search/?stext=%EC%84%9C%EC%9A%B8+%EC%9E%91%EC%97%85%EC%B9%98%EB%A3%8C%EC%82%AC"
+    seen = set()
+    base = "https://www.jobkorea.co.kr/Search/?stext=%EC%84%9C%EC%9A%B8+%EC%9E%91%EC%97%85%EC%B9%98%EB%A3%8C%EC%82%AC"
     try:
-        r = requests.get(url, headers=headers(), timeout=15)
-        r.raise_for_status()
-        soup = BeautifulSoup(r.text, "lxml")
+        for page in range(1, MAX_PAGES + 1):
+            url = f"{base}&tabType=recruit&Page_No={page}"
+            r = requests.get(url, headers=headers(), timeout=15)
+            r.raise_for_status()
+            soup = BeautifulSoup(r.text, "lxml")
 
-        for item in soup.select(".list-default .list-post"):
-            title_el = item.select_one(".post-list-info a.title")
-            if not title_el:
-                # 대체 셀렉터
-                title_el = item.select_one(".title")
-            if not title_el:
-                continue
+            items = soup.select(".list-default .list-post")
+            if not items:
+                break
 
-            title = title_el.get_text(strip=True)
-            link = title_el.get("href", "")
-            if link and not link.startswith("http"):
-                link = "https://www.jobkorea.co.kr" + link
+            page_added = 0
+            for item in items:
+                title_el = item.select_one(".post-list-info a.title") or item.select_one(".title")
+                if not title_el:
+                    continue
 
-            corp_el = item.select_one(".post-list-corp a") or item.select_one(".name")
-            org = corp_el.get_text(strip=True) if corp_el else ""
+                title = title_el.get_text(strip=True)
+                link = title_el.get("href", "")
+                if link and not link.startswith("http"):
+                    link = "https://www.jobkorea.co.kr" + link
 
-            loc_el = item.select_one(".loc")
-            location = loc_el.get_text(strip=True) if loc_el else ""
+                corp_el = item.select_one(".post-list-corp a") or item.select_one(".name")
+                org = corp_el.get_text(strip=True) if corp_el else ""
 
-            full_text = f"{title} {org} {location}"
-            if not (is_seoul(full_text) and matches_keyword(full_text)):
-                continue
-            jt = classify_job_type("", full_text)
-            if jt is None:
-                continue
+                loc_el = item.select_one(".loc")
+                location = loc_el.get_text(strip=True) if loc_el else ""
 
-            jobs.append({
-                "id": make_id(title + org, "jobkorea"),
-                "source": source,
-                "title": title,
-                "org": org,
-                "location": location,
-                "job_type": jt,
-                "deadline": "",
-                "url": link,
-            })
+                full_text = f"{title} {org} {location}"
+                if not (is_seoul(full_text) and matches_keyword(full_text)):
+                    continue
+                jt = classify_job_type("", full_text)
+                if jt is None:
+                    continue
+
+                job_id = make_id(title + org, "jobkorea")
+                if job_id in seen:
+                    continue
+                seen.add(job_id)
+
+                jobs.append({
+                    "id": job_id,
+                    "source": source,
+                    "title": title,
+                    "org": org,
+                    "location": location,
+                    "job_type": jt,
+                    "deadline": "",
+                    "url": link,
+                })
+                page_added += 1
+
+            if page_added == 0:
+                break
+            polite_sleep()
     except Exception as e:
         log.error(f"[잡코리아] 크롤링 실패: {e}")
         return jobs, str(e)
@@ -263,44 +367,62 @@ def crawl_jobkorea():
 def crawl_indeed():
     source = "Indeed"
     jobs = []
-    url = "https://kr.indeed.com/jobs?q=%EC%9E%91%EC%97%85%EC%B9%98%EB%A3%8C%EC%82%AC&l=%EC%84%9C%EC%9A%B8"
+    seen = set()
+    base = "https://kr.indeed.com/jobs?q=%EC%9E%91%EC%97%85%EC%B9%98%EB%A3%8C%EC%82%AC&l=%EC%84%9C%EC%9A%B8"
     try:
-        r = requests.get(url, headers=headers(), timeout=15)
-        r.raise_for_status()
-        soup = BeautifulSoup(r.text, "lxml")
+        for page in range(MAX_PAGES):
+            url = f"{base}&start={page * 10}"
+            r = requests.get(url, headers=headers(), timeout=15)
+            r.raise_for_status()
+            soup = BeautifulSoup(r.text, "lxml")
 
-        for card in soup.select(".job_seen_beacon, .resultContent"):
-            title_el = card.select_one("h2 a, .jobTitle a")
-            if not title_el:
-                continue
-            title = title_el.get_text(strip=True)
-            link = title_el.get("href", "")
-            if link and not link.startswith("http"):
-                link = "https://kr.indeed.com" + link
+            cards = soup.select(".job_seen_beacon, .resultContent")
+            if not cards:
+                break
 
-            comp_el = card.select_one("[data-testid='company-name'], .companyName")
-            org = comp_el.get_text(strip=True) if comp_el else ""
+            page_added = 0
+            for card in cards:
+                title_el = card.select_one("h2 a, .jobTitle a")
+                if not title_el:
+                    continue
+                title = title_el.get_text(strip=True)
+                link = title_el.get("href", "")
+                if link and not link.startswith("http"):
+                    link = "https://kr.indeed.com" + link
 
-            loc_el = card.select_one("[data-testid='text-location'], .companyLocation")
-            location = loc_el.get_text(strip=True) if loc_el else ""
+                comp_el = card.select_one("[data-testid='company-name'], .companyName")
+                org = comp_el.get_text(strip=True) if comp_el else ""
 
-            full_text = f"{title} {org} {location}"
-            if not matches_keyword(full_text):
-                continue
-            jt = classify_job_type("", full_text)
-            if jt is None:
-                continue
+                loc_el = card.select_one("[data-testid='text-location'], .companyLocation")
+                location = loc_el.get_text(strip=True) if loc_el else ""
 
-            jobs.append({
-                "id": make_id(title + org, "indeed"),
-                "source": source,
-                "title": title,
-                "org": org,
-                "location": location if location else "서울",
-                "job_type": jt,
-                "deadline": "",
-                "url": link,
-            })
+                full_text = f"{title} {org} {location}"
+                if not matches_keyword(full_text):
+                    continue
+                jt = classify_job_type("", full_text)
+                if jt is None:
+                    continue
+
+                job_id = make_id(title + org, "indeed")
+                if job_id in seen:
+                    continue
+                seen.add(job_id)
+
+                jobs.append({
+                    "id": job_id,
+                    "source": source,
+                    "title": title,
+                    "org": org,
+                    "location": location if location else "서울",
+                    "job_type": jt,
+                    "deadline": "",
+                    "url": link,
+                })
+                page_added += 1
+
+            if page_added == 0:
+                break
+            polite_sleep()
     except Exception as e:
         log.error(f"[Indeed] 크롤링 실패: {e}")
         return jobs, str(e)

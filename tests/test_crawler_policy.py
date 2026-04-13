@@ -2,6 +2,7 @@
 크롤러 정책 테스트: 키워드 매칭 + 정규직 분류
 """
 import sys
+from datetime import date
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -62,6 +63,45 @@ def test_normalize_url_valid():
     assert crawler.normalize_url("https://a.com/x", "http://b.com") == "https://a.com/x"
     assert crawler.normalize_url("/x", "https://b.com") == "https://b.com/x"
     assert crawler.normalize_url("/x", "https://b.com/") == "https://b.com/x"
+
+
+# ── 마감일 파싱 ──
+TODAY = date(2026, 4, 13)
+
+
+def test_parse_deadline_open_ended():
+    assert crawler.parse_deadline("상시채용", today=TODAY) is None
+    assert crawler.parse_deadline("수시모집", today=TODAY) is None
+    assert crawler.parse_deadline("채용시 마감", today=TODAY) is None
+    assert crawler.parse_deadline("", today=TODAY) is None
+
+
+def test_parse_deadline_dday():
+    assert crawler.parse_deadline("D-5", today=TODAY) == date(2026, 4, 18)
+    assert crawler.parse_deadline("D-0", today=TODAY) == TODAY
+    assert crawler.parse_deadline("오늘마감", today=TODAY) == TODAY
+    assert crawler.parse_deadline("내일마감", today=TODAY) == date(2026, 4, 14)
+
+
+def test_parse_deadline_full_date():
+    assert crawler.parse_deadline("2026-11-15", today=TODAY) == date(2026, 11, 15)
+    assert crawler.parse_deadline("2026.11.15", today=TODAY) == date(2026, 11, 15)
+    assert crawler.parse_deadline("~2026/11/15", today=TODAY) == date(2026, 11, 15)
+
+
+def test_parse_deadline_short_date():
+    assert crawler.parse_deadline("11/15", today=TODAY) == date(2026, 11, 15)
+    assert crawler.parse_deadline("~11/15(수)", today=TODAY) == date(2026, 11, 15)
+    # 과거 월/일은 다음 해로 이월 (6개월 이상 과거)
+    assert crawler.parse_deadline("1/5", today=date(2026, 9, 1)) == date(2027, 1, 5)
+
+
+def test_is_expired():
+    assert crawler.is_expired("2026-03-01", today=TODAY)  # 과거
+    assert not crawler.is_expired("2026-11-15", today=TODAY)  # 미래
+    assert not crawler.is_expired("상시채용", today=TODAY)  # 파싱 불가
+    assert not crawler.is_expired("", today=TODAY)  # 빈값
+    assert not crawler.is_expired("D-0", today=TODAY)  # 오늘 = 미만료
 
 
 def test_normalize_url_reject():
