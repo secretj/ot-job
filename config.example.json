@@ -1,0 +1,6 @@
+{
+  "kakao_rest_api_key": "YOUR_REST_API_KEY",
+  "kakao_redirect_uri": "http://localhost:5050/kakao/callback",
+  "kakao_client_secret": "YOUR_CLIENT_SECRET",
+  "crawl_interval_minutes": 30
+}
