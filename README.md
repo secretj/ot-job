@@ -1,108 +1,130 @@
-# OT 채용 트래커 (서울 작업치료사 / 감각통합치료사)
+# OT 채용 트래커
 
-로컬 Mac에서 돌리는 채용 공고 크롤러 + 카카오톡 알림 + 웹 대시보드
+서울 지역 작업치료·감각통합·요양병원 채용 공고를 수집하여 **카카오톡 나에게 보내기**로 푸시하는 멀티유저 웹앱.
 
-## 구조
+- 배포: https://ot-job-tracker.fly.dev/
+- 인프라: Fly.io (region `nrt`, 볼륨 `ot_data` `/data` 마운트)
+- 스택: Python 3.13 · Flask · APScheduler · SQLite · Gunicorn
+
+---
+
+## 아키텍처
 
 ```
-ot-job-tracker/
-├── crawler.py        # 채용 사이트 크롤링 (메인)
-├── kakao_auth.py     # 카카오톡 최초 인증 (1회만)
-├── kakao_notify.py   # 카카오톡 나에게 보내기
-├── web_server.py     # 웹 대시보드 (Flask)
-├── templates/
-│   └── index.html    # 대시보드 UI
-├── config.json       # 카카오 API 키 등 설정
-├── jobs.db           # SQLite DB (자동 생성)
-├── requirements.txt  # Python 패키지
-├── start.sh          # 원클릭 실행 스크립트
-└── README.md         # 이 파일
+┌──────────────┐   OAuth   ┌──────────────┐
+│ 브라우저/카톡 │ ────────▶ │  Fly.io App   │
+└──────────────┘           │ (Flask+Sched) │
+                           │               │
+                           │ ┌───────────┐ │
+                           │ │ /data/    │ │── SQLite (jobs, users, crawl_log)
+                           │ │  jobs.db  │ │
+                           │ └───────────┘ │
+                           │               │
+                           │ 30분마다 크롤 │── 사람인 / 잡코리아 / Indeed
+                           │   + 발송      │   땡큐오티 / 정신건강OT
+                           └──────────────┘
 ```
 
-## 1단계: Python 확인 및 설치
+- **멀티유저**: 유저별 access/refresh 토큰을 DB에 저장, 만료 시 자동 갱신
+- **카카오 팀원 제한**: 검수 전에는 최대 4명까지 `talk_message` 수신 가능
+
+---
+
+## 수집 정책 (현재)
+
+### 키워드 필터 (`crawler.py:KEYWORDS`)
+`작업치료`, `감각통합`, `OT `, `인지치료`, `요양병원` 중 하나 포함.
+
+### 지역 필터 (`crawler.py:SEOUL_FILTER`)
+`서울` 포함 (사람인/잡코리아 한정, 특화 게시판은 지역정보 없어 "전국/미상" 태그).
+
+### 정규직 분류 (`crawler.py:classify_job_type`)
+| 조건 | 결과 |
+|---|---|
+| `정규직` 명시 | `job_type = "정규직"` |
+| 계약직/파트/아르바이트/인턴/프리랜서/일용직 포함 | **저장 안 함** |
+| 그 외 불명 | `job_type = "미확인"` (태그 표시) |
+
+### URL 정규화 (`crawler.py:normalize_url`)
+- `http://`, `https://` 절대 URL만 허용
+- `/`로 시작하는 상대경로는 base 도메인과 결합
+- `javascript:`, `mailto:`, `#`, 빈값은 버림
+
+---
+
+## 참조 사이트 (현재 5개)
+
+| 이름 | 방식 | 비고 |
+|---|---|---|
+| 사람인 | HTML 파싱 | 검색 URL 1페이지 (페이지네이션 TODO) |
+| 잡코리아 | HTML 파싱 | 검색 URL 1페이지 |
+| Indeed | HTML 파싱 | kr.indeed.com |
+| 땡큐오티 | HTML 게시판 파싱 | thankyouot.com/board1 |
+| 정신건강OT | HTML 게시판 파싱 | kaotmh.org/bbs/bbr_6 |
+
+**확장 예정**: 인크루트, 워크넷(OpenAPI), 대한작업치료사협회, 아이소리몰, 아이톡톡홈티, 아동포털, 개별 병원 5곳.
+
+---
+
+## 엔드포인트
+
+| Path | Method | 설명 |
+|---|---|---|
+| `/` | GET | 대시보드 (공고 목록, NEW 우선 정렬) |
+| `/login` | GET | 카카오 OAuth 시작 |
+| `/kakao/callback` | GET | OAuth 콜백, 유저 저장 |
+| `/logout` | GET | 세션 종료 |
+| `/subscribe` · `/unsubscribe` | POST | 알림 ON/OFF (로그인 필요) |
+| `/health` | GET | 헬스체크 |
+| `/api/jobs?keyword=` | GET | 공고 목록 JSON |
+| `/api/stats` | GET | 전체·신규·정규직 카운트 |
+| `/api/crawl_now` | POST | 즉시 수집 (백그라운드 스레드) |
+| `/api/crawl_status` | GET | 수집 진행 여부 |
+
+---
+
+## 환경변수 (Fly Secrets)
+
+- `KAKAO_REST_API_KEY`
+- `KAKAO_CLIENT_SECRET`
+- `KAKAO_REDIRECT_URI` = `https://ot-job-tracker.fly.dev/kakao/callback`
+- `FLASK_SECRET_KEY`
+- `PUBLIC_URL` = `https://ot-job-tracker.fly.dev`
+- `DB_PATH` = `/data/jobs.db` (fly.toml)
+- `CRAWL_INTERVAL_MINUTES` = `30` (fly.toml)
+
+---
+
+## 테스트
 
 ```bash
-# Python 버전 확인
-python3 --version
-
-# 없으면 Homebrew로 설치
-brew install python3
+python3 -m pytest tests/ -v
 ```
 
-## 2단계: 패키지 설치
+- `tests/test_crawler_policy.py`: 키워드 매칭, 정규직 분류, URL 정규화, 서울 필터 (단위)
+- `tests/test_job_urls.py`: 배포된 앱의 저장 URL 도달성 + 중복 검사 (네트워크 필요)
+
+환경변수 `APP_BASE_URL`로 테스트 대상 지정 가능.
+
+---
+
+## 운영
 
 ```bash
-cd ot-job-tracker
-pip3 install -r requirements.txt
+fly deploy                       # 배포
+fly logs -a ot-job-tracker       # 로그
+fly secrets list -a ot-job-tracker
+fly ssh console -a ot-job-tracker
 ```
 
-## 3단계: 카카오톡 설정
+---
 
-### 3-1. 카카오 개발자 앱 등록
-1. https://developers.kakao.com 접속 → 로그인
-2. [내 애플리케이션] → [애플리케이션 추가하기]
-3. 앱 이름: `OT채용트래커` (아무거나 OK)
-4. 생성 후 [앱 설정] → [앱 키] 에서 **REST API 키** 복사
-
-### 3-2. Redirect URI 설정
-1. [앱 설정] → [플랫폼] → [Web] 추가
-2. 사이트 도메인: `http://localhost:5000`
-3. [제품 설정] → [카카오 로그인] → 활성화 ON
-4. Redirect URI: `http://localhost:5000/kakao/callback`
-
-### 3-3. 동의 항목 설정
-1. [제품 설정] → [카카오 로그인] → [동의항목]
-2. **카카오톡 메시지 전송** → 선택 동의 → 설정
-
-### 3-4. config.json 수정
-```json
-{
-  "kakao_rest_api_key": "여기에_REST_API_키_붙여넣기",
-  "kakao_redirect_uri": "http://localhost:5000/kakao/callback",
-  "crawl_interval_minutes": 30
-}
-```
-
-### 3-5. 카카오 인증 (최초 1회)
-```bash
-python3 kakao_auth.py
-```
-→ 브라우저에서 카카오 로그인 → 동의 → 자동으로 토큰 저장됨
-
-## 4단계: 실행
+## 로컬 개발
 
 ```bash
-# 방법 1: 원클릭 실행 (크롤러 + 웹서버 동시)
-chmod +x start.sh
-./start.sh
-
-# 방법 2: 개별 실행
-python3 crawler.py &    # 백그라운드 크롤링
-python3 web_server.py   # 웹 대시보드 (http://localhost:5000)
+pip3 install --break-system-packages -r requirements.txt
+cp config.example.json config.json  # 로컬 개발용 (Fly에서는 env 사용)
+python3 app.py   # 기본 포트 8080
 ```
 
-## 5단계: 대시보드 확인
-
-브라우저에서 **http://localhost:5000** 접속
-
-## 크롤링 대상 사이트
-
-| 사이트 | 수집 방식 |
-|--------|-----------|
-| 사람인 | 검색 결과 HTML 파싱 |
-| 잡코리아 | 검색 결과 HTML 파싱 |
-| Indeed | 검색 결과 HTML 파싱 |
-| 땡큐오티 | 게시판 HTML 파싱 |
-| 정신건강OT | 구인구직 게시판 파싱 |
-| 워크넷 | 검색 API |
-
-## FAQ
-
-**Q: 크롤링이 차단되면?**
-A: User-Agent를 랜덤으로 돌리고, 요청 간격을 3~5초로 두고 있어서 일반적으로 괜찮아. 혹시 차단되면 `crawler.py`의 `HEADERS`를 수정하면 돼.
-
-**Q: 카카오톡 토큰이 만료되면?**
-A: refresh_token으로 자동 갱신돼. 만약 완전 만료되면 `python3 kakao_auth.py` 다시 실행.
-
-**Q: Mac 재부팅 후에도 자동 실행하고 싶으면?**
-A: `start.sh`를 macOS 로그인 항목에 추가하거나, launchd plist를 설정하면 돼.
+포트 5000은 macOS AirPlay / Cursor가 점유할 수 있으므로 8080 사용.
