@@ -567,12 +567,164 @@ def crawl_kaotmh():
 #  메인 크롤 실행
 # ══════════════════════════════════════════
 
+# ── 아이톡톡 홈티 (childportal) ──
+def crawl_childportal():
+    source = "아이톡톡"
+    jobs = []
+    url = "https://www.childportal.co.kr/board/bbs/board.php?bo_table=job"
+    try:
+        r = requests.get(url, headers=headers(), timeout=15)
+        r.raise_for_status()
+        soup = BeautifulSoup(r.text, "lxml")
+
+        for link_el in soup.select('a[href*="wr_id="]'):
+            title = link_el.get_text(strip=True)
+            href = link_el.get("href", "")
+            if not title or len(title) < 5:
+                continue
+            if not matches_keyword(title):
+                continue
+            if not href.startswith("http"):
+                if href.startswith("/"):
+                    href = "https://www.childportal.co.kr" + href
+                else:
+                    href = "https://www.childportal.co.kr/board/bbs/" + href.lstrip("./")
+
+            jt = classify_job_type("", title)
+            if jt is None:
+                continue
+            location = "서울" if is_seoul(title) else "전국/미상"
+            jobs.append({
+                "id": make_id(title, "childportal"),
+                "source": source,
+                "title": title,
+                "org": "",
+                "location": location,
+                "job_type": jt,
+                "deadline": "",
+                "url": href,
+            })
+    except Exception as e:
+        log.error(f"[아이톡톡] 크롤링 실패: {e}")
+        return jobs, str(e)
+
+    return jobs, "ok"
+
+
+# ── 오티브레인 (otbrain) ──
+def crawl_otbrain():
+    source = "오티브레인"
+    jobs = []
+    url = "http://otbrain.com/index.php?mid=job"
+    try:
+        r = requests.get(url, headers=headers(), timeout=15, verify=False)
+        r.raise_for_status()
+        soup = BeautifulSoup(r.text, "lxml")
+
+        for row in soup.select("table.bd_lst tr"):
+            title_td = row.select_one("td.title a")
+            if not title_td:
+                continue
+            title = title_td.get_text(strip=True)
+            href = title_td.get("href", "")
+            if not title or not matches_keyword(title):
+                continue
+            if not href.startswith("http"):
+                if href.startswith("/"):
+                    href = "http://otbrain.com" + href
+                else:
+                    continue
+
+            cate_el = row.select_one("td.cate")
+            cate = cate_el.get_text(strip=True) if cate_el else ""
+            full_text = f"{cate} {title}"
+
+            jt = classify_job_type("", full_text)
+            if jt is None:
+                continue
+            location = "서울" if is_seoul(full_text) else (cate or "전국/미상")
+            jobs.append({
+                "id": make_id(title, "otbrain"),
+                "source": source,
+                "title": title,
+                "org": "",
+                "location": location,
+                "job_type": jt,
+                "deadline": "",
+                "url": href,
+            })
+    except Exception as e:
+        log.error(f"[오티브레인] 크롤링 실패: {e}")
+        return jobs, str(e)
+
+    return jobs, "ok"
+
+
+# ── 아이소리몰 (isorimall) ──
+def crawl_isorimall():
+    source = "아이소리몰"
+    jobs = []
+    url = "https://isorimall.com/job-community/list.asp"
+    try:
+        r = requests.get(url, headers=headers(), timeout=15)
+        r.raise_for_status()
+        soup = BeautifulSoup(r.text, "lxml")
+
+        for row in soup.select("tr"):
+            link_el = row.select_one('a[href*="View.asp"]')
+            if not link_el:
+                continue
+            tds = row.select("td")
+            if len(tds) < 5:
+                continue
+            qtype = tds[1].get_text(strip=True)
+            if qtype and qtype != "구인":
+                continue
+            org = tds[3].get_text(strip=True)
+            title = link_el.get_text(strip=True).rstrip("N").strip()
+            deadline_text = tds[5].get_text(strip=True) if len(tds) > 5 else ""
+            full_text = f"{org} {title}"
+
+            if not matches_keyword(full_text):
+                continue
+            href = link_el.get("href", "")
+            if not href.startswith("http"):
+                href = "https://isorimall.com/job-community/" + href.lstrip("./")
+
+            jt = classify_job_type("", full_text)
+            if jt is None:
+                continue
+            location = "서울" if is_seoul(full_text) else "전국/미상"
+
+            m = re.search(r"~\s*(20\d{2}[-./]\d{1,2}[-./]\d{1,2})", deadline_text)
+            deadline = m.group(1) if m else ""
+
+            jobs.append({
+                "id": make_id(title + org, "isorimall"),
+                "source": source,
+                "title": title,
+                "org": org,
+                "location": location,
+                "job_type": jt,
+                "deadline": deadline,
+                "url": href,
+            })
+    except Exception as e:
+        log.error(f"[아이소리몰] 크롤링 실패: {e}")
+        return jobs, str(e)
+
+    return jobs, "ok"
+
+
 ALL_CRAWLERS = [
     ("사람인", crawl_saramin),
     ("잡코리아", crawl_jobkorea),
     ("Indeed", crawl_indeed),
     ("땡큐오티", crawl_thankyouot),
     ("정신건강OT", crawl_kaotmh),
+    ("아이톡톡", crawl_childportal),
+    ("오티브레인", crawl_otbrain),
+    ("아이소리몰", crawl_isorimall),
 ]
 
 def run_crawl():
