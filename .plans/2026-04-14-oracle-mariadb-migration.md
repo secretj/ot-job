@@ -3,7 +3,9 @@ date: 2026-04-14T10:30:00+09:00
 project: ot-job-tracker
 topic: "Fly.io(SQLite) → Oracle Always Free VM 2대 + MariaDB 이전 Phase 계획"
 author: pm-agent
-status: approved
+status: superseded
+superseded_by: .plans/2026-04-14-mac-mini-selfhost-migration.md
+superseded_reason: "사용자 해외결제 카드 미보유로 Oracle Cloud 가입 불가 → Mac mini 자가호스팅 + Docker Compose + Tailscale Funnel로 선회 (2026-04-14)"
 inputs:
   - .research/2026-04-14-oracle-mariadb-migration.md
   - .handoffs/2026-04-14_10-11-14_agent-roles-and-oracle-migration-plan.md
@@ -19,6 +21,13 @@ decisions_locked:
   - 모니터링 알림: 이메일 (UptimeRobot)
   - www. 서브도메인: 발급 안 함
 ---
+
+> **이 계획서는 SUPERSEDED 되었습니다.**
+> 2026-04-14 Oracle Cloud 가입 불가(해외결제 카드 미보유) 판명으로 인해
+> Mac mini 자가호스팅 + Docker Compose + Tailscale Funnel 기반의 새 계획으로 전면 교체되었습니다.
+> 신 계획: `.plans/2026-04-14-mac-mini-selfhost-migration.md`
+> 본 문서는 의사결정 히스토리 보존 목적으로만 유지됩니다.
+
 
 # Oracle Always Free VM + MariaDB 이전 계획서
 
