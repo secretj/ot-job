@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 """
 OT 채용 트래커 - 멀티유저 웹앱 (Flask + Kakao OAuth + 크롤러 스케줄러)
+MariaDB 백엔드.
 """
 import os
 import json
 import secrets
-import logging
-import sqlite3
 from datetime import datetime
 from pathlib import Path
 
@@ -16,20 +15,18 @@ from apscheduler.schedulers.background import BackgroundScheduler
 
 import crawler
 import kakao_notify
+from db import get_conn
+from logging_setup import configure_logging, get_logger
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
-log = logging.getLogger("app")
+configure_logging()
+log = get_logger("app")
 
 # ── 환경변수 ──
 KAKAO_REST_API_KEY = os.environ["KAKAO_REST_API_KEY"]
 KAKAO_CLIENT_SECRET = os.environ.get("KAKAO_CLIENT_SECRET", "")
 KAKAO_REDIRECT_URI = os.environ["KAKAO_REDIRECT_URI"]
 FLASK_SECRET_KEY = os.environ.get("FLASK_SECRET_KEY", secrets.token_hex(32))
-DB_PATH = os.environ.get("DB_PATH", "/data/jobs.db")
 CRAWL_INTERVAL_MINUTES = int(os.environ.get("CRAWL_INTERVAL_MINUTES", "30"))
-
-os.makedirs(os.path.dirname(DB_PATH) or ".", exist_ok=True)
-crawler.DB_PATH = Path(DB_PATH)
 
 app = Flask(__name__)
 app.secret_key = FLASK_SECRET_KEY
@@ -37,67 +34,70 @@ app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Lax")
 
 
 # ══════════════════════════════════════════
-#  DB - users 테이블
+#  DB 초기화 (스키마 로드)
 # ══════════════════════════════════════════
-def db():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
+SCHEMA_PATH = Path(__file__).parent / "schema.sql"
 
 
-def init_users_db():
-    conn = db()
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            kakao_id INTEGER PRIMARY KEY,
-            nickname TEXT,
-            access_token TEXT,
-            refresh_token TEXT,
-            expires_at TEXT,
-            enabled INTEGER DEFAULT 1,
-            created_at TEXT,
-            custom_keywords TEXT DEFAULT '[]',
-            custom_regions TEXT DEFAULT '[]'
-        )
-    """)
-    # 기존 DB 마이그레이션
-    cols = {row[1] for row in conn.execute("PRAGMA table_info(users)").fetchall()}
-    if "custom_keywords" not in cols:
-        conn.execute("ALTER TABLE users ADD COLUMN custom_keywords TEXT DEFAULT '[]'")
-    if "custom_regions" not in cols:
-        conn.execute("ALTER TABLE users ADD COLUMN custom_regions TEXT DEFAULT '[]'")
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS job_reads (
-            kakao_id INTEGER NOT NULL,
-            job_id TEXT NOT NULL,
-            read_at TEXT NOT NULL,
-            PRIMARY KEY (kakao_id, job_id)
-        )
-    """)
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_reads_user ON job_reads(kakao_id)")
-    conn.commit()
-    conn.close()
+def _split_sql_statements(sql_text: str):
+    """세미콜론 기반 분리. schema.sql은 trigger 등 복합문 없음 가정."""
+    for stmt in sql_text.split(";"):
+        s = stmt.strip()
+        if s:
+            yield s
 
 
+def init_db():
+    """MariaDB 스키마 로드. idempotent (CREATE TABLE IF NOT EXISTS)."""
+    sql_text = SCHEMA_PATH.read_text(encoding="utf-8")
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            for stmt in _split_sql_statements(sql_text):
+                cur.execute(stmt)
+
+    # 런타임 마이그레이션: custom_keywords/regions 컬럼이 없으면 추가
+    # (schema.sql이 NOT NULL이라 새로 만들면 불필요하지만, 기존 환경 호환용)
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+                WHERE TABLE_SCHEMA = %s AND TABLE_NAME = 'users'
+                """,
+                (os.environ["DB_NAME"],),
+            )
+            cols = {r["COLUMN_NAME"] for r in cur.fetchall()}
+            if "custom_keywords" not in cols:
+                cur.execute(
+                    "ALTER TABLE users ADD COLUMN custom_keywords TEXT NOT NULL"
+                )
+            if "custom_regions" not in cols:
+                cur.execute(
+                    "ALTER TABLE users ADD COLUMN custom_regions TEXT NOT NULL"
+                )
+
+
+# ══════════════════════════════════════════
+#  DB - users / job_reads 엑세스
+# ══════════════════════════════════════════
 def mark_job_read(kakao_id, job_id):
-    conn = db()
-    conn.execute(
-        "INSERT OR IGNORE INTO job_reads (kakao_id, job_id, read_at) VALUES (?, ?, ?)",
-        (kakao_id, job_id, datetime.now().isoformat()),
-    )
-    conn.commit()
-    conn.close()
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT IGNORE INTO job_reads (kakao_id, job_id, read_at) VALUES (%s, %s, %s)",
+                (kakao_id, job_id, datetime.now().isoformat()),
+            )
 
 
 def get_read_ids(kakao_id):
-    conn = db()
-    rows = conn.execute("SELECT job_id FROM job_reads WHERE kakao_id=?", (kakao_id,)).fetchall()
-    conn.close()
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT job_id FROM job_reads WHERE kakao_id=%s", (kakao_id,))
+            rows = cur.fetchall()
     return {r["job_id"] for r in rows}
 
 
 def _parse_csv_list(raw):
-    """콤마/줄바꿈 구분된 문자열 → 정제된 리스트."""
     if not raw:
         return []
     items = []
@@ -110,9 +110,10 @@ def _parse_csv_list(raw):
 
 def get_user_customs():
     """모든 활성 유저의 custom_keywords/regions 합집합 반환."""
-    conn = db()
-    rows = conn.execute("SELECT custom_keywords, custom_regions FROM users WHERE enabled=1").fetchall()
-    conn.close()
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT custom_keywords, custom_regions FROM users WHERE enabled=1")
+            rows = cur.fetchall()
     kws, regs = set(), set()
     for r in rows:
         try:
@@ -124,24 +125,27 @@ def get_user_customs():
 
 
 def set_user_settings(kakao_id, keywords, regions):
-    conn = db()
-    conn.execute(
-        "UPDATE users SET custom_keywords=?, custom_regions=? WHERE kakao_id=?",
-        (json.dumps(keywords, ensure_ascii=False), json.dumps(regions, ensure_ascii=False), kakao_id),
-    )
-    conn.commit()
-    conn.close()
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE users SET custom_keywords=%s, custom_regions=%s WHERE kakao_id=%s",
+                (
+                    json.dumps(keywords, ensure_ascii=False),
+                    json.dumps(regions, ensure_ascii=False),
+                    kakao_id,
+                ),
+            )
 
 
 def get_user(kakao_id):
-    conn = db()
-    row = conn.execute("SELECT * FROM users WHERE kakao_id=?", (kakao_id,)).fetchone()
-    conn.close()
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM users WHERE kakao_id=%s", (kakao_id,))
+            row = cur.fetchone()
     return dict(row) if row else None
 
 
 def job_matches_user(job, user):
-    """유저의 (default ∪ custom) 키워드·지역에 해당하면 True."""
     try:
         user_kw = json.loads(user.get("custom_keywords") or "[]")
         user_rg = json.loads(user.get("custom_regions") or "[]")
@@ -150,10 +154,8 @@ def job_matches_user(job, user):
     kws = crawler.DEFAULT_KEYWORDS + user_kw
     regs = crawler.DEFAULT_REGIONS + user_rg
     full_text = f"{job.get('title','')} {job.get('org','')} {job.get('location','')}"
-    # 키워드 매칭 필수
     if not any(k in full_text for k in kws):
         return False
-    # 지역: location이 "전국/미상"이면 통과 (게시판류), 아니면 매칭 확인
     loc = job.get("location", "")
     if loc and "전국" not in loc and "미상" not in loc:
         if not any(r in (loc + " " + full_text) for r in regs):
@@ -162,42 +164,46 @@ def job_matches_user(job, user):
 
 
 def upsert_user(kakao_id, nickname, access_token, refresh_token, expires_at):
-    conn = db()
-    conn.execute("""
-        INSERT INTO users (kakao_id, nickname, access_token, refresh_token, expires_at, created_at)
-        VALUES (?, ?, ?, ?, ?, ?)
-        ON CONFLICT(kakao_id) DO UPDATE SET
-            nickname=excluded.nickname,
-            access_token=excluded.access_token,
-            refresh_token=excluded.refresh_token,
-            expires_at=excluded.expires_at
-    """, (kakao_id, nickname, access_token, refresh_token, expires_at, datetime.now().isoformat()))
-    conn.commit()
-    conn.close()
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO users (kakao_id, nickname, access_token, refresh_token, expires_at, created_at, custom_keywords, custom_regions)
+                VALUES (%s, %s, %s, %s, %s, %s, '[]', '[]')
+                ON DUPLICATE KEY UPDATE
+                    nickname=VALUES(nickname),
+                    access_token=VALUES(access_token),
+                    refresh_token=VALUES(refresh_token),
+                    expires_at=VALUES(expires_at)
+                """,
+                (kakao_id, nickname, access_token, refresh_token, expires_at, datetime.now().isoformat()),
+            )
 
 
 def get_enabled_users():
-    conn = db()
-    rows = conn.execute("SELECT * FROM users WHERE enabled = 1").fetchall()
-    conn.close()
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM users WHERE enabled = 1")
+            rows = cur.fetchall()
     return [dict(r) for r in rows]
 
 
 def set_enabled(kakao_id, enabled):
-    conn = db()
-    conn.execute("UPDATE users SET enabled = ? WHERE kakao_id = ?", (1 if enabled else 0, kakao_id))
-    conn.commit()
-    conn.close()
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE users SET enabled = %s WHERE kakao_id = %s",
+                (1 if enabled else 0, kakao_id),
+            )
 
 
 def update_tokens(kakao_id, access_token, refresh_token, expires_at):
-    conn = db()
-    conn.execute(
-        "UPDATE users SET access_token=?, refresh_token=?, expires_at=? WHERE kakao_id=?",
-        (access_token, refresh_token, expires_at, kakao_id),
-    )
-    conn.commit()
-    conn.close()
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE users SET access_token=%s, refresh_token=%s, expires_at=%s WHERE kakao_id=%s",
+                (access_token, refresh_token, expires_at, kakao_id),
+            )
 
 
 # ══════════════════════════════════════════
@@ -246,8 +252,6 @@ def expires_at_from_seconds(sec):
 #  Routes
 # ══════════════════════════════════════════
 def _group_duplicates(jobs):
-    """org+title 정규화 키로 같은 공고를 묶는다.
-    각 그룹은 대표 job 한 건 + sources=[{source,url,id}] 리스트."""
     groups = {}
     order = []
     for j in jobs:
@@ -260,13 +264,11 @@ def _group_duplicates(jobs):
         g = groups[key]
         g["sources"].append({"source": j.get("source"), "url": j.get("url"), "id": j.get("id")})
         g["dup_count"] += 1
-        # 대표는 is_new 우선, 그 다음 최신 crawled_at
         if (j.get("is_new") and not g.get("is_new")) or (
             j.get("is_new") == g.get("is_new") and (j.get("crawled_at") or "") > (g.get("crawled_at") or "")
         ):
             for f in ("id", "source", "url", "crawled_at", "is_new", "deadline", "job_type", "location"):
                 g[f] = j.get(f)
-        # 그룹 전체 "read"는 전 멤버가 읽힌 경우에만
         g["read"] = g.get("read", True) and j.get("read", False)
     return [groups[k] for k in order]
 
@@ -285,11 +287,12 @@ def _attach_read_flag(jobs, me):
 @app.route("/")
 def index():
     me = session.get("user")
-    conn = db()
-    jobs = [dict(j) for j in conn.execute(
-        "SELECT * FROM jobs ORDER BY is_new DESC, crawled_at DESC LIMIT 200"
-    ).fetchall()]
-    conn.close()
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT * FROM jobs ORDER BY is_new DESC, crawled_at DESC LIMIT 200"
+            )
+            jobs = [dict(j) for j in cur.fetchall()]
     _attach_read_flag(jobs, me)
     jobs = _group_duplicates(jobs)
     if me:
@@ -306,11 +309,13 @@ def login():
 def kakao_callback():
     code = request.args.get("code")
     if not code:
+        log.warning("auth.failed", reason="missing_code")
         return "인증 실패: code 없음", 400
     try:
         tok = exchange_code(code)
         profile = fetch_profile(tok["access_token"])
     except requests.HTTPError as e:
+        log.warning("auth.failed", reason="kakao_http_error", status=e.response.status_code)
         return f"카카오 인증 실패: {e.response.text}", 400
 
     kakao_id = profile["id"]
@@ -323,6 +328,7 @@ def kakao_callback():
         expires_at=expires_at_from_seconds(tok.get("expires_in", 21600)),
     )
     session["user"] = {"id": kakao_id, "nickname": nickname}
+    log.info("auth.login", user_id=kakao_id)
     return redirect(url_for("index"))
 
 
@@ -379,8 +385,17 @@ def settings():
 
 
 @app.route("/health")
+@app.route("/healthz")
 def health():
-    return "ok"
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1 AS ok")
+                cur.fetchone()
+        return jsonify({"status": "ok"})
+    except Exception as e:
+        log.error("health.db_failed", error=str(e))
+        return jsonify({"status": "error"}), 503
 
 
 @app.route("/api/jobs")
@@ -388,16 +403,20 @@ def api_jobs():
     me = session.get("user")
     keyword = request.args.get("keyword", "")
     only_unread = request.args.get("unread") == "1"
-    conn = db()
-    if keyword:
-        q = f"%{keyword}%"
-        rows = conn.execute(
-            "SELECT * FROM jobs WHERE title LIKE ? OR org LIKE ? OR location LIKE ? OR job_type LIKE ? ORDER BY is_new DESC, crawled_at DESC LIMIT 200",
-            (q, q, q, q),
-        ).fetchall()
-    else:
-        rows = conn.execute("SELECT * FROM jobs ORDER BY is_new DESC, crawled_at DESC LIMIT 200").fetchall()
-    conn.close()
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            if keyword:
+                q = f"%{keyword}%"
+                cur.execute(
+                    "SELECT * FROM jobs WHERE title LIKE %s OR org LIKE %s OR location LIKE %s OR job_type LIKE %s "
+                    "ORDER BY is_new DESC, crawled_at DESC LIMIT 200",
+                    (q, q, q, q),
+                )
+            else:
+                cur.execute(
+                    "SELECT * FROM jobs ORDER BY is_new DESC, crawled_at DESC LIMIT 200"
+                )
+            rows = cur.fetchall()
     jobs = [dict(r) for r in rows]
     _attach_read_flag(jobs, me)
     jobs = _group_duplicates(jobs)
@@ -413,36 +432,54 @@ def api_mark_read(job_id):
     me = session.get("user")
     if not me:
         return jsonify({"error": "로그인 필요"}), 401
-    conn = db()
-    row = conn.execute("SELECT org, title FROM jobs WHERE id=?", (job_id,)).fetchone()
-    if not row:
-        conn.close()
-        mark_job_read(me["id"], job_id)
-        return jsonify({"ok": True})
-    target_key = crawler.dedup_key(row["org"], row["title"])
-    all_rows = conn.execute("SELECT id, org, title FROM jobs").fetchall()
-    conn.close()
-    matching = [r["id"] for r in all_rows if crawler.dedup_key(r["org"], r["title"]) == target_key]
-    for jid in matching:
-        mark_job_read(me["id"], jid)
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT org, title FROM jobs WHERE id=%s", (job_id,))
+            row = cur.fetchone()
+            if not row:
+                # 존재하지 않는 job_id라도 읽음 마크 자체는 기록 허용
+                cur.execute(
+                    "INSERT IGNORE INTO job_reads (kakao_id, job_id, read_at) VALUES (%s, %s, %s)",
+                    (me["id"], job_id, datetime.now().isoformat()),
+                )
+                return jsonify({"ok": True})
+            target_key = crawler.dedup_key(row["org"], row["title"])
+            cur.execute("SELECT id, org, title FROM jobs")
+            all_rows = cur.fetchall()
+            matching = [
+                r["id"] for r in all_rows if crawler.dedup_key(r["org"], r["title"]) == target_key
+            ]
+            now_iso = datetime.now().isoformat()
+            # 배치 INSERT IGNORE 로 N+1 회피
+            if matching:
+                cur.executemany(
+                    "INSERT IGNORE INTO job_reads (kakao_id, job_id, read_at) VALUES (%s, %s, %s)",
+                    [(me["id"], jid, now_iso) for jid in matching],
+                )
     return jsonify({"ok": True, "marked": len(matching)})
 
 
 @app.route("/api/stats")
 def api_stats():
-    conn = db()
-    total = conn.execute("SELECT COUNT(*) FROM jobs").fetchone()[0]
-    new_ = conn.execute("SELECT COUNT(*) FROM jobs WHERE is_new=1").fetchone()[0]
-    fulltime = conn.execute("SELECT COUNT(*) FROM jobs WHERE job_type LIKE '%정규%'").fetchone()[0]
-    logs = conn.execute("SELECT * FROM crawl_log ORDER BY id DESC LIMIT 10").fetchall()
     me = session.get("user")
-    unread = None
-    if me:
-        unread = conn.execute(
-            "SELECT COUNT(*) FROM jobs WHERE id NOT IN (SELECT job_id FROM job_reads WHERE kakao_id=?)",
-            (me["id"],),
-        ).fetchone()[0]
-    conn.close()
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) AS c FROM jobs")
+            total = cur.fetchone()["c"]
+            cur.execute("SELECT COUNT(*) AS c FROM jobs WHERE is_new=1")
+            new_ = cur.fetchone()["c"]
+            cur.execute("SELECT COUNT(*) AS c FROM jobs WHERE job_type LIKE %s", ("%정규%",))
+            fulltime = cur.fetchone()["c"]
+            cur.execute("SELECT * FROM crawl_log ORDER BY id DESC LIMIT 10")
+            logs = cur.fetchall()
+            unread = None
+            if me:
+                cur.execute(
+                    "SELECT COUNT(*) AS c FROM jobs "
+                    "WHERE id NOT IN (SELECT job_id FROM job_reads WHERE kakao_id=%s)",
+                    (me["id"],),
+                )
+                unread = cur.fetchone()["c"]
     return jsonify({
         "total": total, "new": new_, "fulltime": fulltime,
         "unread": unread,
@@ -486,18 +523,21 @@ def run_crawl_and_notify():
     extra_kw, extra_rg = get_user_customs()
     crawler.EXTRA_KEYWORDS = list(extra_kw)
     crawler.EXTRA_REGIONS = list(extra_rg)
+    start_ts = datetime.now()
+    log.info("crawl.started")
     try:
         new_jobs = crawler.run_crawl()
     except Exception as e:
-        log.exception(f"크롤링 실패: {e}")
+        log.exception("crawl.failed", error=str(e))
         return
     finally:
         crawler.EXTRA_KEYWORDS = []
         crawler.EXTRA_REGIONS = []
+    duration_ms = int((datetime.now() - start_ts).total_seconds() * 1000)
+    log.info("crawl.finished", new_jobs=len(new_jobs), duration_ms=duration_ms)
     if not new_jobs:
         return
     users = get_enabled_users()
-    log.info(f"신규 {len(new_jobs)}건 → {len(users)}명 대상 필터링/발송")
     for u in users:
         matched = [j for j in new_jobs if job_matches_user(j, u)]
         if not matched:
@@ -505,19 +545,25 @@ def run_crawl_and_notify():
         try:
             kakao_notify.send_new_jobs_for_user(u, matched, on_token_refresh=update_tokens)
         except Exception as e:
-            log.warning(f"발송 실패 user={u['kakao_id']}: {e}")
+            log.warning("notify.failed", user_id=u["kakao_id"], error=str(e))
 
 
 def start_scheduler():
     sched = BackgroundScheduler(timezone="Asia/Seoul")
     sched.add_job(run_crawl_and_notify, "interval", minutes=CRAWL_INTERVAL_MINUTES, id="crawl")
     sched.start()
-    log.info(f"스케줄러 시작: {CRAWL_INTERVAL_MINUTES}분 간격")
+    log.info("scheduler.started", interval_min=CRAWL_INTERVAL_MINUTES)
 
 
-init_users_db()
-crawler.init_db()  # jobs, crawl_log 테이블 생성
-if os.environ.get("ENABLE_SCHEDULER", "1") == "1":
+if os.environ.get("DB_NAME"):
+    # DB 환경변수가 세팅되어 있을 때만 즉시 초기화
+    # (일부 tooling/import 단계에서 DB 없이 모듈 로드하는 경우 회피)
+    try:
+        init_db()
+    except Exception as e:
+        log.error("db.init_failed", error=str(e))
+
+if os.environ.get("ENABLE_SCHEDULER", "1") == "1" and os.environ.get("DB_NAME"):
     start_scheduler()
 
 

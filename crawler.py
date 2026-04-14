@@ -5,29 +5,24 @@ OT 채용 트래커 - 크롤러
 """
 
 import os
-import sqlite3
 import time
 import json
 import re
 import random
 import hashlib
-import logging
 from datetime import datetime, date, timedelta
 from pathlib import Path
 
 import requests
 from bs4 import BeautifulSoup
 
+from db import get_conn
+from logging_setup import get_logger
+
 BASE_DIR = Path(__file__).parent
-DB_PATH = BASE_DIR / "jobs.db"
 CONFIG_PATH = BASE_DIR / "config.json"
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    datefmt="%H:%M:%S",
-)
-log = logging.getLogger("crawler")
+log = get_logger("crawler")
 
 # ── User-Agent 풀 ──
 UA_LIST = [
@@ -67,60 +62,46 @@ def polite_sleep():
 
 
 # ══════════════════════════════════════════
-#  DB
+#  DB (MariaDB)
+#
+#  스키마 DDL은 schema.sql + app.init_db()에서 관리.
+#  여기서는 INSERT 전용 헬퍼만 유지.
 # ══════════════════════════════════════════
 def init_db():
-    conn = sqlite3.connect(DB_PATH)
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS jobs (
-            id TEXT PRIMARY KEY,
-            source TEXT,
-            title TEXT,
-            org TEXT,
-            location TEXT,
-            job_type TEXT,
-            deadline TEXT,
-            url TEXT,
-            crawled_at TEXT,
-            is_new INTEGER DEFAULT 1,
-            notified INTEGER DEFAULT 0
-        )
-    """)
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS crawl_log (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            timestamp TEXT,
-            source TEXT,
-            found INTEGER,
-            new_count INTEGER,
-            status TEXT
-        )
-    """)
-    conn.commit()
-    return conn
+    """하위 호환용 no-op. 실제 스키마 로드는 app.init_db() 담당."""
+    return None
+
 
 def insert_job(conn, job):
-    """새 공고면 True, 기존이면 False"""
+    """새 공고면 True, 기존이면 False.
+
+    conn: pymysql Connection (컨텍스트 매니저로 get_conn()에서 얻은 것).
+    """
     url = job.get("url", "")
     if not url or not url.startswith(("http://", "https://")):
         return False
-    cur = conn.execute("SELECT id FROM jobs WHERE id = ?", (job["id"],))
-    if cur.fetchone():
-        return False
-    conn.execute(
-        "INSERT INTO jobs (id, source, title, org, location, job_type, deadline, url, crawled_at) VALUES (?,?,?,?,?,?,?,?,?)",
-        (job["id"], job["source"], job["title"], job["org"], job["location"],
-         job["job_type"], job["deadline"], job["url"], datetime.now().isoformat()),
-    )
-    conn.commit()
+    with conn.cursor() as cur:
+        cur.execute("SELECT id FROM jobs WHERE id = %s", (job["id"],))
+        if cur.fetchone():
+            return False
+        cur.execute(
+            "INSERT INTO jobs (id, source, title, org, location, job_type, deadline, url, crawled_at) "
+            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+            (
+                job["id"], job["source"], job["title"], job["org"], job["location"],
+                job["job_type"], job["deadline"], job["url"], datetime.now().isoformat(),
+            ),
+        )
     return True
 
+
 def log_crawl(conn, source, found, new_count, status="ok"):
-    conn.execute(
-        "INSERT INTO crawl_log (timestamp, source, found, new_count, status) VALUES (?,?,?,?,?)",
-        (datetime.now().isoformat(), source, found, new_count, status),
-    )
-    conn.commit()
+    with conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO crawl_log (timestamp, source, found, new_count, status) "
+            "VALUES (%s,%s,%s,%s,%s)",
+            (datetime.now().isoformat(), source, found, new_count, status),
+        )
 
 
 # ══════════════════════════════════════════
@@ -728,31 +709,28 @@ ALL_CRAWLERS = [
 ]
 
 def run_crawl():
-    """전체 크롤링 1회 실행. 새 공고 리스트 반환."""
-    conn = init_db()
+    """전체 크롤링 1회 실행. 새 공고 리스트 반환.
+
+    전체 수집 동안 단일 커넥션을 공유해 루프마다 신규 커넥션 비용을 회피.
+    """
     total_new = []
+    with get_conn() as conn:
+        for name, func in ALL_CRAWLERS:
+            log.info("crawl.source.started", source=name)
+            jobs, status = func()
+            new_count = 0
+            for job in jobs:
+                if insert_job(conn, job):
+                    new_count += 1
+                    total_new.append(job)
+            log_crawl(conn, name, len(jobs), new_count, status)
+            log.info(
+                "crawl.source.finished",
+                source=name, found=len(jobs), new_count=new_count, status=status,
+            )
+            polite_sleep()
 
-    log.info("=" * 50)
-    log.info("크롤링 시작")
-
-    for name, func in ALL_CRAWLERS:
-        log.info(f"📡 [{name}] 수집 중...")
-        jobs, status = func()
-        new_count = 0
-
-        for job in jobs:
-            if insert_job(conn, job):
-                new_count += 1
-                total_new.append(job)
-
-        log_crawl(conn, name, len(jobs), new_count, status)
-        log.info(f"  → 수집 {len(jobs)}건, 신규 {new_count}건 {'✅' if status == 'ok' else '❌ ' + status}")
-        polite_sleep()
-
-    log.info(f"크롤링 완료! 총 신규 {len(total_new)}건")
-    log.info("=" * 50)
-
-    conn.close()
+    log.info("crawl.run.done", total_new=len(total_new))
     return total_new
 
 
