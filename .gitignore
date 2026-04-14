@@ -7,3 +7,5 @@ venv/
 .env
 .handoffs/
 .pytest_cache/
+data/
+backups/

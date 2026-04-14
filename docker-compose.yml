@@ -1,0 +1,86 @@
+# 애플리케이션 스택 (developer 범위: mariadb / app / scheduler).
+# loki / promtail / grafana 는 infra 담당이 Phase 1 스켈레톤에 맞춰 덧붙일 예정.
+# 호스트 절대경로 금지 — 상대 경로 또는 named volume.
+services:
+  mariadb:
+    image: mariadb:10.11
+    restart: unless-stopped
+    environment:
+      MARIADB_ROOT_PASSWORD: ${DB_ROOT_PASSWORD}
+      MARIADB_DATABASE: ${DB_NAME:-otjob}
+      MARIADB_USER: ${DB_USER:-otjob}
+      MARIADB_PASSWORD: ${DB_PASSWORD}
+      TZ: ${TZ:-Asia/Seoul}
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+    volumes:
+      - mariadb_data:/var/lib/mysql
+      - ./schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      mariadb:
+        condition: service_healthy
+    environment:
+      DB_HOST: mariadb
+      DB_PORT: "3306"
+      DB_NAME: ${DB_NAME:-otjob}
+      DB_USER: ${DB_USER:-otjob}
+      DB_PASSWORD: ${DB_PASSWORD}
+      DB_POOL_SIZE: "5"
+      KAKAO_REST_API_KEY: ${KAKAO_REST_API_KEY}
+      KAKAO_CLIENT_SECRET: ${KAKAO_CLIENT_SECRET:-}
+      KAKAO_REDIRECT_URI: ${KAKAO_REDIRECT_URI}
+      FLASK_SECRET_KEY: ${FLASK_SECRET_KEY}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL}
+      ENABLE_SCHEDULER: "0"    # scheduler 컨테이너가 전담
+      LOG_LEVEL: INFO
+      TZ: ${TZ:-Asia/Seoul}
+    command: ["gunicorn", "-b", "0.0.0.0:8000", "-w", "2", "app:app"]
+    ports:
+      - "127.0.0.1:8000:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+
+  scheduler:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      mariadb:
+        condition: service_healthy
+    environment:
+      DB_HOST: mariadb
+      DB_PORT: "3306"
+      DB_NAME: ${DB_NAME:-otjob}
+      DB_USER: ${DB_USER:-otjob}
+      DB_PASSWORD: ${DB_PASSWORD}
+      DB_POOL_SIZE: "3"
+      KAKAO_REST_API_KEY: ${KAKAO_REST_API_KEY}
+      KAKAO_CLIENT_SECRET: ${KAKAO_CLIENT_SECRET:-}
+      KAKAO_REDIRECT_URI: ${KAKAO_REDIRECT_URI}
+      FLASK_SECRET_KEY: ${FLASK_SECRET_KEY}
+      CRAWL_INTERVAL_MINUTES: ${CRAWL_INTERVAL_MINUTES:-30}
+      CRAWL_MAX_PAGES: ${CRAWL_MAX_PAGES:-5}
+      ENABLE_SCHEDULER: "0"
+      LOG_LEVEL: INFO
+      TZ: ${TZ:-Asia/Seoul}
+    command: ["python", "-m", "scheduler_main"]
+    # single instance 보장 - replicas 설정 금지
+
+volumes:
+  mariadb_data:
