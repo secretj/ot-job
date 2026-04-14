@@ -37,7 +37,8 @@ Fly.io(pay-as-you-go, SQLite 단일 볼륨) 런타임을 사용자 보유 **Mac 
 | 항목 | 지표 | 합격선 |
 |---|---|---|
 | 가용성 | 컷오버 후 72시간 `/healthz` 성공률 | ≥ 99.0% (Mac mini 단일 장애점 감안하여 Oracle 계획보다 0.5%p 완화) |
-| 데이터 정합성 | users/jobs/job_reads/crawl_log 행 수 | 이전 전 = 이전 후 (diff 0) |
+| 데이터 정합성 | users/jobs/crawl_log 행 수 | 이전 전 = 이전 후 (diff 0) |
+| 데이터 정합성 | job_reads 행 수 | 이전 후 ≤ 이전 전 (FK CASCADE 신규 도입으로 고아 행 정리됨. 감소분은 삭제된 jobs 참조 행과 일치해야 함) |
 | 기능 동등성 | 기존 pytest 스위트 | 44/44 pass (MariaDB conftest, Docker) |
 | 인증 연속성 | 기존 유저 2명 재로그인 없이 접속 | 양쪽 모두 `/me` 정상 |
 | 크롤러 주기 | APScheduler 30분 tick | 컷오버 후 첫 6 tick 성공 |
@@ -167,7 +168,7 @@ Fly.io(pay-as-you-go, SQLite 단일 볼륨) 런타임을 사용자 보유 **Mac 
   - 로컬 compose의 MariaDB에 적재 → 4개 테이블 행 수/샘플 체크섬 일치
 - **롤백:** 로컬 MariaDB 볼륨 DROP 후 재생성
 - **예상:** 4시간
-- **gate:** 행 수 diff 0, 유저 토큰 2건 완전 일치
+- **gate:** users/jobs/crawl_log 행 수 diff 0, job_reads는 고아 행 제거분 외 diff 0, 유저 토큰 2건 완전 일치. 이전 스크립트는 job_reads 삭제 사유(어떤 job_id가 없어서 누락됐는지)를 로그로 남길 것
 
 ### Phase 7 — Mac mini 스테이징 + 카카오 OAuth URI 추가
 - **담당:** infra(배포) + developer(OAuth 설정 반영) + tester(수락)
@@ -294,7 +295,7 @@ Phase 0 (superseded 처리 + 런북 정리)
 - [ ] Fly `read-only` 플래그 on (쓰기 503)
 - [ ] Fly APScheduler 정지 (`fly machine stop`)
 - [ ] 최종 `/data/jobs.db` 덤프 → 로컬 → Mac mini MariaDB 증분 import
-- [ ] 행 수 비교 (users=2, jobs≥34, job_reads≥15, crawl_log≥48)
+- [ ] 행 수 비교 (users=2, jobs≥34, crawl_log≥48). job_reads는 고아 행 제거분 제외 일치 (삭제 사유 로그 확인)
 - [ ] Mac mini compose healthy 재확인
 - [ ] `curl -I https://otjob.<tailnet>.ts.net/healthz` 3회 연속 200
 - [ ] Fly 앱에 302 redirect 코드 배포
