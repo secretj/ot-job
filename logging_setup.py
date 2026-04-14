@@ -1,59 +1,67 @@
 """
-구조화 로깅 초기 스텁.
+structlog 기반 구조화 JSON 로깅.
 
-- Phase 4 C2에서 호출 사이트만 먼저 도입(get_logger).
-- C3에서 structlog JSON 포맷 확정(configure_logging).
-- 이 파일이 먼저 존재해야 app.py/crawler.py 의 import가 깨지지 않는다.
+설계 원칙:
+  - stdout 단일 스트림으로 방출 → Docker log driver → Promtail → Loki
+  - JSON 라인 포맷 (Loki 파싱 쉬움)
+  - event 이름 표준화: snake_case + dot-namespace
+      예) crawl.started, crawl.finished, crawl.source.finished,
+          auth.login, auth.failed, notify.failed,
+          db.init_failed, health.db_failed, scheduler.started
+  - 공통 context 바인딩 가능: user_id, source, duration_ms
+
+사용:
+    from logging_setup import configure_logging, get_logger
+    configure_logging()
+    log = get_logger("app")
+    log.info("auth.login", user_id=123)
 """
 from __future__ import annotations
 
 import logging
+import os
 import sys
+
+import structlog
 
 
 _configured = False
 
 
 def configure_logging() -> None:
-    """기본 logging 초기화. C3에서 structlog로 교체될 예정."""
     global _configured
     if _configured:
         return
+
+    level_name = os.environ.get("LOG_LEVEL", "INFO").upper()
+    level = getattr(logging, level_name, logging.INFO)
+
+    # stdlib logging 기본 핸들러 (APScheduler/werkzeug 등 구조화 안 된 로거 대응)
     logging.basicConfig(
-        level=logging.INFO,
+        level=level,
         stream=sys.stdout,
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        format="%(message)s",
     )
+
+    timestamper = structlog.processors.TimeStamper(fmt="iso", utc=False)
+
+    structlog.configure(
+        processors=[
+            structlog.contextvars.merge_contextvars,
+            structlog.processors.add_log_level,
+            timestamper,
+            structlog.processors.StackInfoRenderer(),
+            structlog.processors.format_exc_info,
+            structlog.processors.JSONRenderer(ensure_ascii=False),
+        ],
+        wrapper_class=structlog.make_filtering_bound_logger(level),
+        logger_factory=structlog.PrintLoggerFactory(file=sys.stdout),
+        cache_logger_on_first_use=True,
+    )
+
     _configured = True
 
 
 def get_logger(name: str):
-    """구조화 호출 호환 래퍼. structlog 스타일 kwargs를 받아 logging으로 전달."""
     configure_logging()
-    return _KVLogger(logging.getLogger(name))
-
-
-class _KVLogger:
-    def __init__(self, base: logging.Logger):
-        self._base = base
-
-    def _fmt(self, event: str, **kv) -> str:
-        if not kv:
-            return event
-        parts = " ".join(f"{k}={v}" for k, v in kv.items())
-        return f"{event} {parts}"
-
-    def info(self, event: str, **kv):
-        self._base.info(self._fmt(event, **kv))
-
-    def warning(self, event: str, **kv):
-        self._base.warning(self._fmt(event, **kv))
-
-    def error(self, event: str, **kv):
-        self._base.error(self._fmt(event, **kv))
-
-    def exception(self, event: str, **kv):
-        self._base.exception(self._fmt(event, **kv))
-
-    def debug(self, event: str, **kv):
-        self._base.debug(self._fmt(event, **kv))
+    return structlog.get_logger(name)

@@ -4,12 +4,13 @@
 """
 import os
 import json
-import logging
 from datetime import datetime, timedelta
 
 import requests
 
-log = logging.getLogger("kakao_notify")
+from logging_setup import get_logger
+
+log = get_logger("kakao_notify")
 
 KAKAO_REST_API_KEY = os.environ.get("KAKAO_REST_API_KEY", "")
 KAKAO_CLIENT_SECRET = os.environ.get("KAKAO_CLIENT_SECRET", "")
@@ -86,4 +87,4 @@ def send_new_jobs_for_user(user, new_jobs, on_token_refresh=None, base_url=None)
         "button_title": "자세히 보기",
     }
     send_memo(access, template)
-    log.info(f"발송 완료 → {user.get('nickname', user['kakao_id'])}")
+    log.info("notify.sent", user_id=user["kakao_id"], nickname=user.get("nickname"))
