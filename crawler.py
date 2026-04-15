@@ -545,41 +545,74 @@ def crawl_kaotmh():
 
 # ── 아이톡톡 홈티 (childportal) ──
 def crawl_childportal():
+    """
+    gnuboard 기반 게시판. 글 목록은 `?bo_table=job&page=N` 으로 페이지네이션.
+    제목에는 `지역|기관명공고제목` 형태로 prefix가 붙는다.
+    """
     source = "아이톡톡"
     jobs = []
-    url = "https://www.childportal.co.kr/board/bbs/board.php?bo_table=job"
+    seen = set()
+    base = "https://www.childportal.co.kr/board/bbs/board.php?bo_table=job"
     try:
-        r = requests.get(url, headers=headers(), timeout=15)
-        r.raise_for_status()
-        soup = BeautifulSoup(r.text, "lxml")
+        for page in range(1, MAX_PAGES + 1):
+            url = base if page == 1 else f"{base}&page={page}"
+            r = requests.get(url, headers=headers(), timeout=15)
+            r.raise_for_status()
+            soup = BeautifulSoup(r.text, "lxml")
 
-        for link_el in soup.select('a[href*="wr_id="]'):
-            title = link_el.get_text(strip=True)
-            href = link_el.get("href", "")
-            if not title or len(title) < 5:
-                continue
-            if not matches_keyword(title):
-                continue
-            if not href.startswith("http"):
-                if href.startswith("/"):
-                    href = "https://www.childportal.co.kr" + href
-                else:
-                    href = "https://www.childportal.co.kr/board/bbs/" + href.lstrip("./")
+            anchors = soup.select('a[href*="wr_id="]')
+            if not anchors:
+                break
 
-            jt = classify_job_type("", title)
-            if jt is None:
-                continue
-            location = "서울" if is_seoul(title) else "전국/미상"
-            jobs.append({
-                "id": make_id(title, "childportal"),
-                "source": source,
-                "title": title,
-                "org": "",
-                "location": location,
-                "job_type": jt,
-                "deadline": "",
-                "url": href,
-            })
+            page_added = 0
+            for link_el in anchors:
+                title = link_el.get_text(strip=True)
+                href = link_el.get("href", "")
+                if not title or len(title) < 5:
+                    continue
+                if not matches_keyword(title):
+                    continue
+                if not href.startswith("http"):
+                    if href.startswith("/"):
+                        href = "https://www.childportal.co.kr" + href
+                    else:
+                        href = "https://www.childportal.co.kr/board/bbs/" + href.lstrip("./")
+
+                jt = classify_job_type("", title)
+                if jt is None:
+                    continue
+                # 제목 "서울|기관명..." 형태면 지역 추출
+                location = "전국/미상"
+                m = re.match(r"^(서울|경기|인천|부산|대구|대전|광주|울산|세종|강원|충북|충남|전북|전남|경북|경남|제주)\|", title)
+                if m:
+                    location = m.group(1)
+                elif is_seoul(title):
+                    location = "서울"
+
+                # 서울 기준 필터 (다른 지역은 수집하지 않음 — effective_regions 기준)
+                if not matches_region(location + " " + title):
+                    continue
+
+                job_id = make_id(title, "childportal")
+                if job_id in seen:
+                    continue
+                seen.add(job_id)
+
+                jobs.append({
+                    "id": job_id,
+                    "source": source,
+                    "title": title,
+                    "org": "",
+                    "location": location,
+                    "job_type": jt,
+                    "deadline": "",
+                    "url": href,
+                })
+                page_added += 1
+
+            if page_added == 0:
+                break
+            polite_sleep()
     except Exception as e:
         log.error(f"[아이톡톡] 크롤링 실패: {e}")
         return jobs, str(e)
