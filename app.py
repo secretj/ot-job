@@ -61,19 +61,18 @@ def init_db():
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
-                WHERE TABLE_SCHEMA = %s AND TABLE_NAME = 'users'
-                """,
-                (os.environ["DB_NAME"],),
+                SELECT column_name FROM information_schema.columns
+                WHERE table_schema = 'public' AND table_name = 'users'
+                """
             )
-            cols = {r["COLUMN_NAME"] for r in cur.fetchall()}
+            cols = {r["column_name"] for r in cur.fetchall()}
             if "custom_keywords" not in cols:
                 cur.execute(
-                    "ALTER TABLE users ADD COLUMN custom_keywords TEXT NOT NULL"
+                    "ALTER TABLE users ADD COLUMN custom_keywords TEXT NOT NULL DEFAULT '[]'"
                 )
             if "custom_regions" not in cols:
                 cur.execute(
-                    "ALTER TABLE users ADD COLUMN custom_regions TEXT NOT NULL"
+                    "ALTER TABLE users ADD COLUMN custom_regions TEXT NOT NULL DEFAULT '[]'"
                 )
 
 
@@ -84,7 +83,7 @@ def mark_job_read(kakao_id, job_id):
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "INSERT IGNORE INTO job_reads (kakao_id, job_id, read_at) VALUES (%s, %s, %s)",
+                "INSERT INTO job_reads (kakao_id, job_id, read_at) VALUES (%s, %s, %s) ON CONFLICT (kakao_id, job_id) DO NOTHING",
                 (kakao_id, job_id, datetime.now().isoformat()),
             )
 
@@ -112,7 +111,7 @@ def get_user_customs():
     """모든 활성 유저의 custom_keywords/regions 합집합 반환."""
     with get_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT custom_keywords, custom_regions FROM users WHERE enabled=1")
+            cur.execute("SELECT custom_keywords, custom_regions FROM users WHERE enabled = TRUE")
             rows = cur.fetchall()
     kws, regs = set(), set()
     for r in rows:
@@ -170,11 +169,11 @@ def upsert_user(kakao_id, nickname, access_token, refresh_token, expires_at):
                 """
                 INSERT INTO users (kakao_id, nickname, access_token, refresh_token, expires_at, created_at, custom_keywords, custom_regions)
                 VALUES (%s, %s, %s, %s, %s, %s, '[]', '[]')
-                ON DUPLICATE KEY UPDATE
-                    nickname=VALUES(nickname),
-                    access_token=VALUES(access_token),
-                    refresh_token=VALUES(refresh_token),
-                    expires_at=VALUES(expires_at)
+                ON CONFLICT (kakao_id) DO UPDATE SET
+                    nickname=EXCLUDED.nickname,
+                    access_token=EXCLUDED.access_token,
+                    refresh_token=EXCLUDED.refresh_token,
+                    expires_at=EXCLUDED.expires_at
                 """,
                 (kakao_id, nickname, access_token, refresh_token, expires_at, datetime.now().isoformat()),
             )
@@ -183,7 +182,7 @@ def upsert_user(kakao_id, nickname, access_token, refresh_token, expires_at):
 def get_enabled_users():
     with get_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT * FROM users WHERE enabled = 1")
+            cur.execute("SELECT * FROM users WHERE enabled = TRUE")
             rows = cur.fetchall()
     return [dict(r) for r in rows]
 
@@ -193,7 +192,7 @@ def set_enabled(kakao_id, enabled):
         with conn.cursor() as cur:
             cur.execute(
                 "UPDATE users SET enabled = %s WHERE kakao_id = %s",
-                (1 if enabled else 0, kakao_id),
+                (bool(enabled), kakao_id),
             )
 
 
@@ -439,7 +438,7 @@ def api_mark_read(job_id):
             if not row:
                 # 존재하지 않는 job_id라도 읽음 마크 자체는 기록 허용
                 cur.execute(
-                    "INSERT IGNORE INTO job_reads (kakao_id, job_id, read_at) VALUES (%s, %s, %s)",
+                    "INSERT INTO job_reads (kakao_id, job_id, read_at) VALUES (%s, %s, %s) ON CONFLICT (kakao_id, job_id) DO NOTHING",
                     (me["id"], job_id, datetime.now().isoformat()),
                 )
                 return jsonify({"ok": True})
@@ -453,7 +452,7 @@ def api_mark_read(job_id):
             # 배치 INSERT IGNORE 로 N+1 회피
             if matching:
                 cur.executemany(
-                    "INSERT IGNORE INTO job_reads (kakao_id, job_id, read_at) VALUES (%s, %s, %s)",
+                    "INSERT INTO job_reads (kakao_id, job_id, read_at) VALUES (%s, %s, %s) ON CONFLICT (kakao_id, job_id) DO NOTHING",
                     [(me["id"], jid, now_iso) for jid in matching],
                 )
     return jsonify({"ok": True, "marked": len(matching)})
@@ -466,7 +465,7 @@ def api_stats():
         with conn.cursor() as cur:
             cur.execute("SELECT COUNT(*) AS c FROM jobs")
             total = cur.fetchone()["c"]
-            cur.execute("SELECT COUNT(*) AS c FROM jobs WHERE is_new=1")
+            cur.execute("SELECT COUNT(*) AS c FROM jobs WHERE is_new = TRUE")
             new_ = cur.fetchone()["c"]
             cur.execute("SELECT COUNT(*) AS c FROM jobs WHERE job_type LIKE %s", ("%정규%",))
             fulltime = cur.fetchone()["c"]
@@ -555,7 +554,7 @@ def start_scheduler():
     log.info("scheduler.started", interval_min=CRAWL_INTERVAL_MINUTES)
 
 
-if os.environ.get("DB_NAME"):
+if os.environ.get("DATABASE_URL"):
     # DB 환경변수가 세팅되어 있을 때만 즉시 초기화
     # (일부 tooling/import 단계에서 DB 없이 모듈 로드하는 경우 회피)
     try:
@@ -563,7 +562,7 @@ if os.environ.get("DB_NAME"):
     except Exception as e:
         log.error("db.init_failed", error=str(e))
 
-if os.environ.get("ENABLE_SCHEDULER", "1") == "1" and os.environ.get("DB_NAME"):
+if os.environ.get("ENABLE_SCHEDULER", "1") == "1" and os.environ.get("DATABASE_URL"):
     start_scheduler()
 
 
