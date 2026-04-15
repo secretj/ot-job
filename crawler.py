@@ -109,7 +109,16 @@ def log_crawl(conn, source, found, new_count, status="ok"):
 # ══════════════════════════════════════════
 
 DEFAULT_KEYWORDS = ["작업치료", "감각통합", "OT ", "인지치료", "요양병원"]
-DEFAULT_REGIONS = ["서울"]
+# 서울 본체 + 25개 구 이름. 제목에 "강남구 XX병원"처럼 구 이름만 있는
+# 공고도 서울로 인식하기 위함. 검색은 "서울"이 AND 조건이라 이 리스트
+# 중 하나라도 매칭되면 서울로 본다.
+SEOUL_DISTRICTS = [
+    "강남", "강동", "강북", "강서", "관악", "광진", "구로", "금천",
+    "노원", "도봉", "동대문", "동작", "마포", "서대문", "서초", "성동",
+    "성북", "송파", "양천", "영등포", "용산", "은평", "종로", "중구",
+    "중랑",
+]
+DEFAULT_REGIONS = ["서울"] + SEOUL_DISTRICTS
 
 # 런타임에 app.py가 유저 커스텀과 합쳐 주입. 비어있으면 DEFAULT 사용.
 EXTRA_KEYWORDS: list = []
@@ -323,90 +332,94 @@ def crawl_jobkorea():
     source = "잡코리아"
     jobs = []
     seen = set()
-    base = "https://www.jobkorea.co.kr/Search/?stext=%EC%84%9C%EC%9A%B8+%EC%9E%91%EC%97%85%EC%B9%98%EB%A3%8C%EC%82%AC"
+    # 사이트 자체 검색으로 "서울 AND <키워드>" 를 여러 번 돌려 결과 병합.
+    from urllib.parse import quote
+    search_terms = ["서울 작업치료사", "서울 감각통합치료사", "서울 인지치료사", "서울 작업치료"]
+    REGION_TOKENS = (
+        "서울", "경기", "인천", "부산", "대구", "대전", "광주",
+        "울산", "세종", "강원", "충북", "충남", "전북", "전남",
+        "경북", "경남", "제주",
+    )
+    NON_SEOUL_REGIONS = tuple(r for r in REGION_TOKENS if r != "서울")
     try:
-        for page in range(1, MAX_PAGES + 1):
-            url = f"{base}&tabType=recruit&Page_No={page}"
-            r = requests.get(url, headers=headers(), timeout=15)
-            r.raise_for_status()
-            soup = BeautifulSoup(r.text, "lxml")
+        for term in search_terms:
+            base = f"https://www.jobkorea.co.kr/Search/?stext={quote(term)}"
+            for page in range(1, MAX_PAGES + 1):
+                url = f"{base}&tabType=recruit&Page_No={page}"
+                r = requests.get(url, headers=headers(), timeout=15)
+                r.raise_for_status()
+                soup = BeautifulSoup(r.text, "lxml")
 
-            cards = soup.select("div.shadow-list")
-            if not cards:
-                # 구버전 레이아웃 fallback
-                cards = soup.select(".list-default .list-post")
-            if not cards:
-                break
+                cards = soup.select("div.shadow-list")
+                if not cards:
+                    cards = soup.select(".list-default .list-post")
+                if not cards:
+                    break
 
-            page_added = 0
-            for card in cards:
-                anchors = [
-                    a for a in card.select("a[href*='/Recruit/GI_Read/']")
-                    if a.get_text(strip=True)
-                ]
-                if not anchors:
-                    continue
-                # 가장 긴 텍스트를 가진 anchor = 공고 제목, 두 번째는 대체로 회사명
-                anchors.sort(key=lambda a: len(a.get_text(strip=True)), reverse=True)
-                title_el = anchors[0]
-                title = title_el.get_text(strip=True)
-                link = title_el.get("href", "")
-                if link and not link.startswith("http"):
-                    link = "https://www.jobkorea.co.kr" + link
-
-                # 회사명: title anchor 외에 짧은 텍스트의 link anchor
-                org = ""
-                for a in anchors[1:]:
-                    t = a.get_text(strip=True)
-                    if t and t != title:
-                        org = t
-                        break
-
-                # 지역: 카드 span 중 '서울/경기/...' 시도 문자열 포함
-                REGION_TOKENS = (
-                    "서울", "경기", "인천", "부산", "대구", "대전", "광주",
-                    "울산", "세종", "강원", "충북", "충남", "전북", "전남",
-                    "경북", "경남", "제주",
-                )
-                location = ""
-                # 하위에 또 span 이 있는 wrapper 는 건너뛰고 리프 span 중 지역 표기만 매칭
-                for span in card.select("span"):
-                    if span.find("span"):
+                page_added = 0
+                for card in cards:
+                    anchors = [
+                        a for a in card.select("a[href*='/Recruit/GI_Read/']")
+                        if a.get_text(strip=True)
+                    ]
+                    if not anchors:
                         continue
-                    t = span.get_text(strip=True)
-                    if not t or t == title or t == org:
+                    anchors.sort(key=lambda a: len(a.get_text(strip=True)), reverse=True)
+                    title_el = anchors[0]
+                    title = title_el.get_text(strip=True)
+                    link = title_el.get("href", "")
+                    if link and not link.startswith("http"):
+                        link = "https://www.jobkorea.co.kr" + link
+
+                    org = ""
+                    for a in anchors[1:]:
+                        t = a.get_text(strip=True)
+                        if t and t != title:
+                            org = t
+                            break
+
+                    location = ""
+                    for span in card.select("span"):
+                        if span.find("span"):
+                            continue
+                        t = span.get_text(strip=True)
+                        if not t or t == title or t == org:
+                            continue
+                        if any(t.startswith(r) for r in REGION_TOKENS) and len(t) < 40:
+                            location = t
+                            break
+
+                    full_text = f"{title} {org} {location}"
+                    # 비서울 지역 표기가 있으면 버림. 없으면 사이트 검색 조건
+                    # ("서울 ...")을 신뢰하고 통과.
+                    if location and any(location.startswith(r) for r in NON_SEOUL_REGIONS):
                         continue
-                    if any(t.startswith(r) for r in REGION_TOKENS) and len(t) < 40:
-                        location = t
-                        break
+                    if not matches_keyword(full_text):
+                        continue
+                    jt = classify_job_type("", full_text)
+                    if jt is None:
+                        continue
 
-                full_text = f"{title} {org} {location}"
-                if not (is_seoul(full_text) and matches_keyword(full_text)):
-                    continue
-                jt = classify_job_type("", full_text)
-                if jt is None:
-                    continue
+                    job_id = make_id(title + org, "jobkorea")
+                    if job_id in seen:
+                        continue
+                    seen.add(job_id)
 
-                job_id = make_id(title + org, "jobkorea")
-                if job_id in seen:
-                    continue
-                seen.add(job_id)
+                    jobs.append({
+                        "id": job_id,
+                        "source": source,
+                        "title": title,
+                        "org": org,
+                        "location": location or "서울",
+                        "job_type": jt,
+                        "deadline": "",
+                        "url": link,
+                    })
+                    page_added += 1
 
-                jobs.append({
-                    "id": job_id,
-                    "source": source,
-                    "title": title,
-                    "org": org,
-                    "location": location or "서울",
-                    "job_type": jt,
-                    "deadline": "",
-                    "url": link,
-                })
-                page_added += 1
-
-            if page_added == 0:
-                break
-            polite_sleep()
+                if page_added == 0:
+                    break
+                polite_sleep()
     except Exception as e:
         log.error(f"[잡코리아] 크롤링 실패: {e}")
         return jobs, str(e)
@@ -461,7 +474,10 @@ def crawl_thankyouot():
                 if not matches_keyword(title):
                     continue
 
-                location = "서울" if is_seoul(title) else "전국/미상"
+                # 서울 공고만 수집 (제목에 "서울" 또는 서울 구 이름 포함)
+                if not is_seoul(title):
+                    continue
+                location = "서울"
                 jt = classify_job_type("", title)
                 if jt is None:
                     continue
