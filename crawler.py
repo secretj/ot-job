@@ -315,6 +315,11 @@ def crawl_saramin():
 
 # ── 잡코리아 ──
 def crawl_jobkorea():
+    """
+    2026년 리뉴얼된 잡코리아 검색 결과는 React 기반 마크업으로
+    `.list-default .list-post` 클래스가 사라지고 `div.shadow-list`
+    카드 안에 `/Recruit/GI_Read/` 링크와 회사/지역 span이 배치됨.
+    """
     source = "잡코리아"
     jobs = []
     seen = set()
@@ -326,26 +331,54 @@ def crawl_jobkorea():
             r.raise_for_status()
             soup = BeautifulSoup(r.text, "lxml")
 
-            items = soup.select(".list-default .list-post")
-            if not items:
+            cards = soup.select("div.shadow-list")
+            if not cards:
+                # 구버전 레이아웃 fallback
+                cards = soup.select(".list-default .list-post")
+            if not cards:
                 break
 
             page_added = 0
-            for item in items:
-                title_el = item.select_one(".post-list-info a.title") or item.select_one(".title")
-                if not title_el:
+            for card in cards:
+                anchors = [
+                    a for a in card.select("a[href*='/Recruit/GI_Read/']")
+                    if a.get_text(strip=True)
+                ]
+                if not anchors:
                     continue
-
+                # 가장 긴 텍스트를 가진 anchor = 공고 제목, 두 번째는 대체로 회사명
+                anchors.sort(key=lambda a: len(a.get_text(strip=True)), reverse=True)
+                title_el = anchors[0]
                 title = title_el.get_text(strip=True)
                 link = title_el.get("href", "")
                 if link and not link.startswith("http"):
                     link = "https://www.jobkorea.co.kr" + link
 
-                corp_el = item.select_one(".post-list-corp a") or item.select_one(".name")
-                org = corp_el.get_text(strip=True) if corp_el else ""
+                # 회사명: title anchor 외에 짧은 텍스트의 link anchor
+                org = ""
+                for a in anchors[1:]:
+                    t = a.get_text(strip=True)
+                    if t and t != title:
+                        org = t
+                        break
 
-                loc_el = item.select_one(".loc")
-                location = loc_el.get_text(strip=True) if loc_el else ""
+                # 지역: 카드 span 중 '서울/경기/...' 시도 문자열 포함
+                REGION_TOKENS = (
+                    "서울", "경기", "인천", "부산", "대구", "대전", "광주",
+                    "울산", "세종", "강원", "충북", "충남", "전북", "전남",
+                    "경북", "경남", "제주",
+                )
+                location = ""
+                # 하위에 또 span 이 있는 wrapper 는 건너뛰고 리프 span 중 지역 표기만 매칭
+                for span in card.select("span"):
+                    if span.find("span"):
+                        continue
+                    t = span.get_text(strip=True)
+                    if not t or t == title or t == org:
+                        continue
+                    if any(t.startswith(r) for r in REGION_TOKENS) and len(t) < 40:
+                        location = t
+                        break
 
                 full_text = f"{title} {org} {location}"
                 if not (is_seoul(full_text) and matches_keyword(full_text)):
@@ -364,7 +397,7 @@ def crawl_jobkorea():
                     "source": source,
                     "title": title,
                     "org": org,
-                    "location": location,
+                    "location": location or "서울",
                     "job_type": jt,
                     "deadline": "",
                     "url": link,
