@@ -3,7 +3,9 @@ date: 2026-04-14T11:30:00+09:00
 project: ot-job-tracker
 topic: "Fly.io(SQLite) → Mac mini 자가호스팅 + Docker Compose + MariaDB + Tailscale Funnel 이전 Phase 계획"
 author: pm-agent
-status: approved
+status: superseded
+superseded_by: .plans/2026-04-15-vercel-neon-githubactions-migration.md
+superseded_reason: "사용자 Mac mini가 영업시간만 켜져있어 24/7 호스팅 불가 판명. Oracle/AWS/GCP 등 카드 등록 필수 옵션은 모두 차단(해외결제 카드 미보유). Vercel + Neon + GitHub Actions 무료 3-tier로 재선회 (2026-04-15)"
 supersedes: .plans/2026-04-14-oracle-mariadb-migration.md
 inputs:
   - .research/2026-04-14-oracle-mariadb-migration.md
