@@ -428,47 +428,64 @@ def crawl_indeed():
 
 # ── 땡큐오티 ──
 def crawl_thankyouot():
+    """
+    땡큐오티 구인 게시판은 imweb 기반 SPA 비슷한 렌더링이라
+    전통적 `<tr>` 구조가 거의 없다. 실제 공고 링크는 `/board1/<번호>`
+    패턴으로 노출되므로 해당 anchor만 스크래핑.
+    여러 페이지를 순회해 가능한 많은 공고를 확보한다.
+    """
     source = "땡큐오티"
     jobs = []
-    url = "https://thankyouot.com/board1"
+    seen = set()
+    base_list = "https://thankyouot.com/board1"
     try:
-        r = requests.get(url, headers=headers(), timeout=15)
-        r.raise_for_status()
-        soup = BeautifulSoup(r.text, "lxml")
+        for page in range(1, MAX_PAGES + 1):
+            url = base_list if page == 1 else f"{base_list}?page={page}"
+            r = requests.get(url, headers=headers(), timeout=15)
+            r.raise_for_status()
+            soup = BeautifulSoup(r.text, "lxml")
 
-        for row in soup.select("tr"):
-            link_el = row.select_one("a")
-            if not link_el:
-                continue
-            title = link_el.get_text(strip=True)
-            href = link_el.get("href", "")
-            if not href or href.lower().startswith(("javascript:", "mailto:", "#")):
-                continue
-            if not href.startswith("http"):
-                if href.startswith("/"):
-                    href = "https://thankyouot.com" + href
-                else:
+            page_added = 0
+            for a in soup.select('a[href*="/board1/"]'):
+                href = a.get("href", "")
+                title = a.get_text(" ", strip=True)
+                if not title or len(title) < 5:
+                    continue
+                # "/board1/2872" 같이 숫자 뒤에 바로 끝나는 상세 링크만
+                m = re.search(r"/board1/(\d+)(?:[/?#]|$)", href)
+                if not m:
+                    continue
+                if not href.startswith("http"):
+                    href = "https://thankyouot.com" + href if href.startswith("/") else "https://thankyouot.com/" + href
+
+                if not matches_keyword(title):
                     continue
 
-            # 서울 관련이거나 키워드 매칭
-            if not matches_keyword(title):
-                continue
-            # 땡큐오티는 지역 구분이 없으므로 제목에서 서울 판별 시도
-            location = "서울" if is_seoul(title) else "전국/미상"
+                location = "서울" if is_seoul(title) else "전국/미상"
+                jt = classify_job_type("", title)
+                if jt is None:
+                    continue
 
-            jt = classify_job_type("", title)
-            if jt is None:
-                continue
-            jobs.append({
-                "id": make_id(title, "thankyouot"),
-                "source": source,
-                "title": title,
-                "org": "",
-                "location": location,
-                "job_type": jt,
-                "deadline": "",
-                "url": href,
-            })
+                job_id = make_id(title + m.group(1), "thankyouot")
+                if job_id in seen:
+                    continue
+                seen.add(job_id)
+
+                jobs.append({
+                    "id": job_id,
+                    "source": source,
+                    "title": title,
+                    "org": "",
+                    "location": location,
+                    "job_type": jt,
+                    "deadline": "",
+                    "url": href,
+                })
+                page_added += 1
+
+            if page_added == 0:
+                break
+            polite_sleep()
     except Exception as e:
         log.error(f"[땡큐오티] 크롤링 실패: {e}")
         return jobs, str(e)
