@@ -55,12 +55,13 @@ OTBRAIN_HTML = """
 
 
 def test_otbrain_parses_cate_and_title():
+    # 서울 지역 필터 정책: 서울 카테고리의 채용글만 수집, 공지/타 지역은 제외
     with patch("crawler.requests.get", return_value=_mock_response(OTBRAIN_HTML)):
         jobs, status = crawler.crawl_otbrain()
     assert status == "ok"
-    assert len(jobs) == 2
+    assert len(jobs) == 1
     assert jobs[0]["location"] == "서울"
-    assert jobs[1]["location"] == "부산"
+    assert "공지사항" not in jobs[0]["title"]
     assert all(j["url"].startswith("http://otbrain.com") for j in jobs)
 
 
