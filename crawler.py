@@ -622,46 +622,81 @@ def crawl_childportal():
 
 # ── 오티브레인 (otbrain) ──
 def crawl_otbrain():
+    """
+    XpressEngine 기반. HTTP로 접속하며(HTTPS는 self-signed), 공고 목록은
+    `table.bd_lst` 의 `<tr>` 단위. 제목 anchor href는 `?document_srl=...`
+    또는 `?mid=job&document_srl=...`. 페이지네이션은 `&page=N`.
+    제목에 "구인/모집" 키워드도 자주 쓰이므로 매칭 범위 넓힘.
+    """
     source = "오티브레인"
     jobs = []
-    url = "http://otbrain.com/index.php?mid=job"
+    seen = set()
+    base = "http://otbrain.com/index.php?mid=job"
+    OTBRAIN_EXTRA_KEYWORDS = ("구인", "모집", "채용")
     try:
-        r = requests.get(url, headers=headers(), timeout=15, verify=False)
-        r.raise_for_status()
-        soup = BeautifulSoup(r.text, "lxml")
+        for page in range(1, MAX_PAGES + 1):
+            url = base if page == 1 else f"{base}&page={page}"
+            r = requests.get(url, headers=headers(), timeout=15)
+            r.raise_for_status()
+            soup = BeautifulSoup(r.text, "lxml")
 
-        for row in soup.select("table.bd_lst tr"):
-            title_td = row.select_one("td.title a")
-            if not title_td:
-                continue
-            title = title_td.get_text(strip=True)
-            href = title_td.get("href", "")
-            if not title or not matches_keyword(title):
-                continue
-            if not href.startswith("http"):
-                if href.startswith("/"):
-                    href = "http://otbrain.com" + href
-                else:
+            rows = soup.select("table.bd_lst tr")
+            if not rows:
+                break
+
+            page_added = 0
+            for row in rows:
+                title_td = row.select_one("td.title a")
+                if not title_td:
+                    continue
+                title = title_td.get_text(strip=True)
+                href = title_td.get("href", "")
+                if not title:
+                    continue
+                # 공지/가이드 글 제거
+                if "공지" in title or "주의사항" in title or "게시판 가기" in title:
+                    continue
+                if not (matches_keyword(title) or any(k in title for k in OTBRAIN_EXTRA_KEYWORDS)):
+                    continue
+                if not href.startswith("http"):
+                    if href.startswith("/"):
+                        href = "http://otbrain.com" + href
+                    else:
+                        continue
+
+                cate_el = row.select_one("td.cate")
+                cate = cate_el.get_text(strip=True) if cate_el else ""
+                full_text = f"{cate} {title}"
+
+                jt = classify_job_type("", full_text)
+                if jt is None:
                     continue
 
-            cate_el = row.select_one("td.cate")
-            cate = cate_el.get_text(strip=True) if cate_el else ""
-            full_text = f"{cate} {title}"
+                # 서울 필터 — 제목/카테에 서울 표기가 있을 때만 수집
+                if not is_seoul(full_text):
+                    continue
 
-            jt = classify_job_type("", full_text)
-            if jt is None:
-                continue
-            location = "서울" if is_seoul(full_text) else (cate or "전국/미상")
-            jobs.append({
-                "id": make_id(title, "otbrain"),
-                "source": source,
-                "title": title,
-                "org": "",
-                "location": location,
-                "job_type": jt,
-                "deadline": "",
-                "url": href,
-            })
+                location = "서울"
+                job_id = make_id(title, "otbrain")
+                if job_id in seen:
+                    continue
+                seen.add(job_id)
+
+                jobs.append({
+                    "id": job_id,
+                    "source": source,
+                    "title": title,
+                    "org": "",
+                    "location": location,
+                    "job_type": jt,
+                    "deadline": "",
+                    "url": href,
+                })
+                page_added += 1
+
+            if page_added == 0:
+                break
+            polite_sleep()
     except Exception as e:
         log.error(f"[오티브레인] 크롤링 실패: {e}")
         return jobs, str(e)
