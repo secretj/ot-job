@@ -2,59 +2,113 @@
 <html lang="ko">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#f5f4ef">
 <title>설정 · OT 채용 트래커</title>
-<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700;900&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable.min.css">
 <style>
-:root{--bg:#0c0c12;--s1:#14141e;--s2:#1c1c2a;--bd:#282840;--tx:#e4e4f0;--dm:#7878a0;--ac:#00e09e;--bl:#4d9fff;--r:12px;--f:'Noto Sans KR',sans-serif}
+:root{
+  --bg:#f5f4ef;
+  --surface:#ffffff;
+  --surface-alt:#efeee8;
+  --line:#e2e0d6;
+  --line-strong:#c9c6b8;
+  --ink:#1f2a28;
+  --ink-soft:#4d5955;
+  --muted:#8a8f86;
+  --accent:#2f6b5e;
+  --accent-soft:#e4efe9;
+  --font:'Pretendard Variable','Pretendard',-apple-system,BlinkMacSystemFont,system-ui,sans-serif;
+  --radius:6px;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --bg:#121512;--surface:#1a1e1b;--surface-alt:#222725;--line:#2d332f;--line-strong:#3b433e;
+    --ink:#e8ebe6;--ink-soft:#b6bdb6;--muted:#7f877f;--accent:#7fc3b1;--accent-soft:#1f2d29;
+  }
+}
 *{margin:0;padding:0;box-sizing:border-box}
-body{font-family:var(--f);background:var(--bg);color:var(--tx);min-height:100vh}
-.wrap{max-width:720px;margin:0 auto;padding:20px}
-.hdr{display:flex;justify-content:space-between;align-items:center;margin-bottom:24px}
-.logo{font-size:20px;font-weight:900;background:linear-gradient(135deg,var(--ac),var(--bl));-webkit-background-clip:text;-webkit-text-fill-color:transparent}
-a.btn,button.btn{padding:8px 16px;background:linear-gradient(135deg,var(--ac),var(--bl));color:var(--bg);border:none;border-radius:var(--r);font-family:var(--f);font-weight:700;cursor:pointer;text-decoration:none;font-size:13px;display:inline-block}
-.card{background:var(--s1);border:1px solid var(--bd);border-radius:var(--r);padding:20px;margin-bottom:14px}
-h2{font-size:16px;margin-bottom:8px}
-p.desc{font-size:12px;color:var(--dm);margin-bottom:12px;line-height:1.5}
-label{display:block;font-size:13px;font-weight:700;margin:14px 0 6px}
-textarea{width:100%;min-height:80px;background:var(--s2);border:1px solid var(--bd);border-radius:8px;padding:10px;color:var(--tx);font-family:var(--f);font-size:13px;resize:vertical}
-textarea:focus{outline:none;border-color:var(--ac)}
-.chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
-.chip{font-size:11px;padding:3px 9px;border-radius:20px;background:var(--s2);color:var(--dm);border:1px solid var(--bd)}
-.note{font-size:11px;color:var(--dm);margin-top:4px}
-.actions{margin-top:18px;display:flex;gap:8px}
+body{font-family:var(--font);background:var(--bg);color:var(--ink);line-height:1.5;-webkit-font-smoothing:antialiased}
+a{color:inherit}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:3px}
+
+.wrap{max-width:680px;margin:0 auto;padding:20px 16px 60px}
+.hdr{display:flex;justify-content:space-between;align-items:center;padding-bottom:16px;margin-bottom:22px;border-bottom:1px solid var(--line)}
+.title{font-size:18px;font-weight:700;letter-spacing:-0.02em}
+.title small{display:block;font-size:11px;font-weight:500;color:var(--muted);letter-spacing:0.02em;margin-top:2px}
+
+.btn{font-size:12px;font-weight:600;padding:7px 11px;border-radius:var(--radius);border:1px solid var(--line-strong);background:var(--surface);color:var(--ink);cursor:pointer;text-decoration:none;display:inline-block;line-height:1.2}
+.btn:hover{border-color:var(--ink-soft);background:var(--surface-alt)}
+.btn.primary{background:var(--ink);border-color:var(--ink);color:var(--bg)}
+.btn.primary:hover{background:var(--accent);border-color:var(--accent);color:#fff}
+
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:20px}
+.panel h2{font-size:15px;font-weight:700;margin-bottom:6px;letter-spacing:-0.01em}
+.desc{font-size:12.5px;color:var(--ink-soft);margin-bottom:18px;line-height:1.6}
+.desc b{color:var(--ink);font-weight:600}
+
+.field{margin-top:18px}
+.field:first-of-type{margin-top:0}
+label{display:block;font-size:12px;font-weight:700;color:var(--ink);margin-bottom:6px;letter-spacing:0.01em}
+label .hint{font-weight:400;color:var(--muted);margin-left:6px;font-size:11px}
+textarea{
+  width:100%;min-height:76px;
+  background:var(--surface);border:1px solid var(--line-strong);border-radius:var(--radius);
+  padding:10px 12px;color:var(--ink);font-family:var(--font);font-size:13px;line-height:1.5;resize:vertical;
+}
+textarea:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+textarea::placeholder{color:var(--muted)}
+
+.default-block{margin-top:8px;padding:10px 12px;background:var(--surface-alt);border-radius:var(--radius);border:1px solid var(--line)}
+.default-label{font-size:11px;color:var(--muted);margin-bottom:6px;letter-spacing:0.02em}
+.chips{display:flex;flex-wrap:wrap;gap:4px}
+.chip{font-size:11px;padding:2px 8px;border-radius:3px;background:var(--surface);color:var(--ink-soft);border:1px solid var(--line)}
+
+.actions{margin-top:24px;padding-top:16px;border-top:1px solid var(--line);display:flex;gap:8px;justify-content:flex-end}
+
+@media (max-width:480px){
+  .wrap{padding:14px 12px 40px}
+  .panel{padding:16px}
+}
 </style>
 </head>
 <body>
 <div class="wrap">
-  <div class="hdr">
-    <div class="logo">⚙️ 내 설정</div>
-    <a class="btn" href="/">← 대시보드</a>
-  </div>
+  <header class="hdr">
+    <div class="title">내 설정<small>알림 받을 키워드와 지역을 조정합니다</small></div>
+    <a class="btn" href="/">대시보드</a>
+  </header>
 
-  <div class="card">
+  <form method="POST" class="panel">
     <h2>맞춤 키워드 · 지역</h2>
     <p class="desc">
-      기본 키워드/지역에 <b>내가 추가한 항목</b>을 더해 필터링합니다.<br>
-      수집 결과는 모든 사용자가 함께 보고, 카카오 알림은 내 설정에 맞는 것만 받습니다.
+      기본 키워드/지역에 <b>내가 추가한 항목</b>을 더해 필터링합니다.
+      수집 결과는 모든 사용자가 함께 보고, 카카오톡 알림은 내 설정에 맞는 공고만 전송됩니다.
     </p>
 
-    <form method="POST">
-      <label>추가 키워드 (콤마 또는 줄바꿈 구분)</label>
+    <div class="field">
+      <label>추가 키워드 <span class="hint">콤마 또는 줄바꿈으로 구분</span></label>
       <textarea name="keywords" placeholder="예: 방문재활, 소아작업치료, 노인복지관">{{ keywords }}</textarea>
-      <div class="note">기본 키워드:</div>
-      <div class="chips">{% for k in default_keywords %}<span class="chip">{{ k }}</span>{% endfor %}</div>
-
-      <label>추가 지역 (콤마 또는 줄바꿈 구분)</label>
-      <textarea name="regions" placeholder="예: 경기, 인천, 성남">{{ regions }}</textarea>
-      <div class="note">기본 지역:</div>
-      <div class="chips">{% for r in default_regions %}<span class="chip">{{ r }}</span>{% endfor %}</div>
-
-      <div class="actions">
-        <button class="btn" type="submit">저장</button>
+      <div class="default-block">
+        <div class="default-label">기본 키워드</div>
+        <div class="chips">{% for k in default_keywords %}<span class="chip">{{ k }}</span>{% endfor %}</div>
       </div>
-    </form>
-  </div>
+    </div>
+
+    <div class="field">
+      <label>추가 지역 <span class="hint">콤마 또는 줄바꿈으로 구분</span></label>
+      <textarea name="regions" placeholder="예: 경기, 인천, 성남">{{ regions }}</textarea>
+      <div class="default-block">
+        <div class="default-label">기본 지역</div>
+        <div class="chips">{% for r in default_regions %}<span class="chip">{{ r }}</span>{% endfor %}</div>
+      </div>
+    </div>
+
+    <div class="actions">
+      <a class="btn" href="/">취소</a>
+      <button class="btn primary" type="submit">저장</button>
+    </div>
+  </form>
 </div>
 </body>
 </html>

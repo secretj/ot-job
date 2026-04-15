@@ -2,109 +2,191 @@
 <html lang="ko">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#f5f4ef">
 <title>OT 채용 트래커</title>
-<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700;900&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable.min.css">
 <style>
-:root{--bg:#0c0c12;--s1:#14141e;--s2:#1c1c2a;--bd:#282840;--tx:#e4e4f0;--dm:#7878a0;--ac:#00e09e;--bl:#4d9fff;--pk:#ff5c8a;--or:#ff9f43;--r:12px;--f:'Noto Sans KR',sans-serif}
+:root{
+  --bg:#f5f4ef;          /* 바랜 종이 톤, 차분 */
+  --surface:#ffffff;
+  --surface-alt:#efeee8;
+  --line:#e2e0d6;
+  --line-strong:#c9c6b8;
+  --ink:#1f2a28;         /* 먹색 가까운 딥 네이비그린 */
+  --ink-soft:#4d5955;
+  --muted:#8a8f86;
+  --accent:#2f6b5e;      /* sage-teal: 의료·차분 */
+  --accent-soft:#e4efe9;
+  --warn:#b7560b;        /* 마감 임박용 테라코타 */
+  --warn-soft:#fbece0;
+  --new:#8b2f4a;         /* 신규 배지 (따뜻한 와인) */
+  --new-soft:#f5e6ea;
+  --font:'Pretendard Variable','Pretendard',-apple-system,BlinkMacSystemFont,system-ui,sans-serif;
+  --radius:6px;
+  --radius-sm:4px;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --bg:#121512;
+    --surface:#1a1e1b;
+    --surface-alt:#222725;
+    --line:#2d332f;
+    --line-strong:#3b433e;
+    --ink:#e8ebe6;
+    --ink-soft:#b6bdb6;
+    --muted:#7f877f;
+    --accent:#7fc3b1;
+    --accent-soft:#1f2d29;
+    --warn:#e8a574;
+    --warn-soft:#2c2319;
+    --new:#d99caf;
+    --new-soft:#2b1e23;
+  }
+}
 *{margin:0;padding:0;box-sizing:border-box}
-body{font-family:var(--f);background:var(--bg);color:var(--tx);min-height:100vh}
-.wrap{max-width:800px;margin:0 auto;padding:16px}
+html,body{background:var(--bg);color:var(--ink)}
+body{font-family:var(--font);font-feature-settings:"ss02","ss03";line-height:1.5;-webkit-font-smoothing:antialiased}
+a{color:inherit}
+button{font-family:inherit}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:3px}
 
-/* header */
-.hdr{display:flex;justify-content:space-between;align-items:center;margin-bottom:20px}
-.logo{font-size:22px;font-weight:900;background:linear-gradient(135deg,var(--ac),var(--bl));-webkit-background-clip:text;-webkit-text-fill-color:transparent}
-.logo sub{font-size:11px;font-weight:400;-webkit-text-fill-color:var(--dm);display:block}
-.crawl-btn{padding:10px 20px;background:linear-gradient(135deg,var(--ac),var(--bl));color:var(--bg);border:none;border-radius:var(--r);font-family:var(--f);font-size:13px;font-weight:700;cursor:pointer}
-.crawl-btn:disabled{opacity:.5}
+.wrap{max-width:780px;margin:0 auto;padding:20px 16px 80px}
 
-/* stats */
-.stats{display:flex;gap:10px;margin-bottom:20px;flex-wrap:wrap}
-.stat{background:var(--s1);border:1px solid var(--bd);border-radius:var(--r);padding:14px 18px;flex:1;min-width:120px}
-.stat-label{font-size:11px;color:var(--dm);margin-bottom:4px}
-.stat-val{font-size:24px;font-weight:900}
-.stat-val.green{color:var(--ac)}.stat-val.blue{color:var(--bl)}.stat-val.pink{color:var(--pk)}
+/* 헤더: 좌측 타이틀 + 메타, 우측 액션. 그라디언트/이모지 제거 */
+.hdr{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;padding-bottom:16px;margin-bottom:20px;border-bottom:1px solid var(--line)}
+.brand{display:flex;flex-direction:column;gap:2px;min-width:0}
+.brand-name{font-size:19px;font-weight:700;letter-spacing:-0.02em;color:var(--ink)}
+.brand-name em{font-style:normal;color:var(--accent)}
+.brand-meta{font-size:11px;color:var(--muted);letter-spacing:0.02em}
+.brand-meta .dot{display:inline-block;width:5px;height:5px;border-radius:50%;background:var(--accent);margin:0 6px 1px;vertical-align:middle}
 
-/* filters */
-.filters{display:flex;gap:6px;margin-bottom:16px;flex-wrap:wrap}
-.fbtn{padding:7px 14px;border-radius:20px;font-size:12px;font-weight:500;background:var(--s1);border:1px solid var(--bd);color:var(--dm);cursor:pointer}
-.fbtn.on{background:rgba(0,224,158,.12);border-color:var(--ac);color:var(--ac)}
+.actions{display:flex;gap:6px;align-items:center;flex-wrap:wrap;justify-content:flex-end}
+.btn{font-size:12px;font-weight:600;padding:7px 11px;border-radius:var(--radius);border:1px solid var(--line-strong);background:var(--surface);color:var(--ink);cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;gap:4px;line-height:1;white-space:nowrap}
+.btn:hover{border-color:var(--ink-soft);background:var(--surface-alt)}
+.btn.primary{background:var(--ink);border-color:var(--ink);color:var(--bg)}
+.btn.primary:hover{background:var(--accent);border-color:var(--accent);color:#fff}
+.btn:disabled{opacity:.5;cursor:not-allowed}
+.who{font-size:12px;color:var(--muted);padding:0 4px}
 
-/* cards */
-.card{background:var(--s1);border:1px solid var(--bd);border-radius:var(--r);padding:16px;margin-bottom:10px;transition:.15s}
-.card:hover{border-color:var(--ac);background:var(--s2)}
-.card.is-new{border-left:3px solid var(--ac)}
-.card.read{opacity:.55}
-.card.read .card-title{font-weight:500;color:var(--dm)}
-.read-badge{font-size:10px;color:var(--dm);background:var(--s2);padding:2px 8px;border-radius:4px}
-.card-top{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
-.src{font-size:10px;font-weight:700;padding:2px 8px;border-radius:5px}
-.src-사람인{background:#1a2a3a;color:#48f}.src-잡코리아{background:#2a1a2a;color:#f69}.src-Indeed{background:#1a1a2a;color:#6c5ce7}
-.src-땡큐오티{background:#1a2a1a;color:#4c8}.src-정신건강OT{background:#2a2a1a;color:#ca4}
-.new-badge{font-size:10px;font-weight:700;color:var(--ac);background:rgba(0,224,158,.1);padding:2px 8px;border-radius:4px}
-.card-title{font-size:15px;font-weight:700;line-height:1.4;margin-bottom:4px}
-.card-org{font-size:12px;color:var(--dm);margin-bottom:6px}
-.tags{display:flex;gap:5px;flex-wrap:wrap;margin-bottom:8px}
-.tag{font-size:10px;padding:2px 8px;border-radius:5px;background:var(--s2);color:var(--dm)}
-.tag.loc{color:var(--bl)}.tag.tp{color:var(--ac)}.tag.dl{color:var(--or)}
-.card-btm{display:flex;justify-content:space-between;align-items:center}
-.card-date{font-size:10px;color:var(--dm)}
-.card-link{font-size:12px;font-weight:700;color:var(--ac);text-decoration:none;padding:6px 12px;border-radius:8px;background:rgba(0,224,158,.08);border:1px solid rgba(0,224,158,.2)}
-.card-link:hover{background:rgba(0,224,158,.2)}
+/* 통계: 표 같은 컴팩트 바 */
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:1px;background:var(--line);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;margin-bottom:18px}
+.stat{background:var(--surface);padding:12px 14px;display:flex;flex-direction:column;gap:2px}
+.stat-label{font-size:11px;color:var(--muted);letter-spacing:0.02em}
+.stat-val{font-size:22px;font-weight:700;color:var(--ink);font-variant-numeric:tabular-nums;letter-spacing:-0.02em}
+.stat-val.accent{color:var(--accent)}
+.stat-val.new{color:var(--new)}
+.stat-val.warn{color:var(--warn)}
 
-/* log */
-.log-section{margin-top:24px}
-.log-title{font-size:14px;font-weight:700;margin-bottom:10px}
-.log-item{font-size:11px;color:var(--dm);padding:6px 0;border-bottom:1px solid rgba(255,255,255,.03)}
-.log-time{color:var(--bl)}
+/* 필터: 얇은 구분선 스타일 탭 */
+.filters{display:flex;gap:2px;margin-bottom:14px;flex-wrap:wrap;border-bottom:1px solid var(--line);padding-bottom:0;overflow-x:auto}
+.fbtn{padding:8px 11px;font-size:12.5px;font-weight:500;color:var(--muted);background:none;border:none;border-bottom:2px solid transparent;cursor:pointer;white-space:nowrap;margin-bottom:-1px}
+.fbtn:hover{color:var(--ink-soft)}
+.fbtn.on{color:var(--ink);border-bottom-color:var(--accent);font-weight:600}
 
-.empty{text-align:center;padding:60px;color:var(--dm)}
-.status-msg{font-size:12px;color:var(--ac);margin-top:8px;text-align:center;min-height:18px}
+.status-msg{font-size:12px;color:var(--accent);margin:4px 0 10px;min-height:16px}
 
-@keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
-.card{animation:fadeIn .25s ease both}
+/* 카드: 정보 밀도 우선, 좌측 상태 스트라이프 */
+.card{position:relative;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:14px 16px 12px;margin-bottom:8px;transition:border-color .12s}
+.card:hover{border-color:var(--line-strong)}
+.card.is-new{border-left:3px solid var(--new);padding-left:13px}
+.card.read{background:transparent;border-style:dashed}
+.card.read .card-title{color:var(--muted);font-weight:500}
+
+.card-top{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:4px;min-height:18px}
+.src-row{display:flex;gap:4px;flex-wrap:wrap;align-items:center}
+.src{font-size:10.5px;font-weight:600;padding:2px 7px;border-radius:var(--radius-sm);background:var(--surface-alt);color:var(--ink-soft);border:1px solid var(--line);letter-spacing:0.02em}
+.src-사람인{color:#2458a8;border-color:#cfdcee;background:#eef3fa}
+.src-잡코리아{color:#9a2347;border-color:#efd3db;background:#fbeef2}
+.src-Indeed{color:#4b3ea0;border-color:#d7d2ec;background:#f1eff9}
+.src-땡큐오티{color:#2b6a4b;border-color:#cfe0d4;background:#eaf3ed}
+.src-정신건강OT{color:#876313;border-color:#e6dab4;background:#f7f0dc}
+@media (prefers-color-scheme: dark){
+  .src{background:var(--surface-alt);color:var(--ink-soft);border-color:var(--line)}
+  .src-사람인,.src-잡코리아,.src-Indeed,.src-땡큐오티,.src-정신건강OT{background:var(--surface-alt);border-color:var(--line)}
+}
+.dup-badge{font-size:10px;color:var(--muted);padding:2px 6px;border-radius:var(--radius-sm);background:var(--surface-alt)}
+.new-badge{font-size:10px;font-weight:700;color:var(--new);background:var(--new-soft);padding:2px 7px;border-radius:var(--radius-sm);letter-spacing:0.04em}
+.read-badge{font-size:10px;color:var(--muted);padding:2px 7px;border-radius:var(--radius-sm);background:var(--surface-alt)}
+
+.card-title{font-size:15px;font-weight:600;line-height:1.4;color:var(--ink);letter-spacing:-0.01em;margin-bottom:3px}
+.card-org{font-size:12.5px;color:var(--ink-soft);margin-bottom:8px}
+.card-org::before{content:"";display:inline-block;width:3px;height:3px;border-radius:50%;background:var(--muted);vertical-align:middle;margin-right:6px;margin-bottom:2px}
+
+.tags{display:flex;gap:4px;flex-wrap:wrap;margin-bottom:8px}
+.tag{font-size:11px;padding:2px 7px;border-radius:var(--radius-sm);background:var(--surface-alt);color:var(--ink-soft);font-weight:500}
+.tag.loc{color:var(--accent);background:var(--accent-soft)}
+.tag.tp{color:var(--ink-soft)}
+.tag.dl{color:var(--warn);background:var(--warn-soft);font-weight:600}
+
+.card-btm{display:flex;justify-content:space-between;align-items:center;padding-top:4px;border-top:1px dashed var(--line)}
+.card-date{font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums}
+.card-link{font-size:12px;font-weight:600;color:var(--accent);text-decoration:none;padding:4px 0}
+.card-link:hover{text-decoration:underline;text-underline-offset:3px}
+
+/* 로그 */
+.log-section{margin-top:32px;padding-top:18px;border-top:1px solid var(--line)}
+.log-title{font-size:12px;font-weight:700;color:var(--muted);letter-spacing:0.08em;text-transform:uppercase;margin-bottom:10px}
+.log-item{font-size:12px;color:var(--ink-soft);padding:6px 0;border-bottom:1px solid var(--line);font-variant-numeric:tabular-nums;display:flex;gap:10px;align-items:baseline}
+.log-item:last-child{border-bottom:none}
+.log-time{color:var(--muted);font-size:11px;min-width:78px}
+.log-ok{color:var(--accent)}
+.log-fail{color:var(--warn)}
+
+.empty{text-align:center;padding:48px 16px;color:var(--muted);font-size:13px;border:1px dashed var(--line);border-radius:var(--radius);background:var(--surface)}
+
+@media (max-width:480px){
+  .wrap{padding:14px 12px 60px}
+  .hdr{flex-direction:column;align-items:stretch}
+  .actions{justify-content:flex-start}
+  .brand-name{font-size:17px}
+  .stat-val{font-size:19px}
+}
 </style>
 </head>
 <body>
 <div class="wrap">
-  <div class="hdr">
-    <div class="logo">OT JOB TRACKER<sub>서울 · 작업치료 · 감각통합</sub></div>
-    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-      <button class="crawl-btn" id="crawlBtn" onclick="crawlNow()">🔍 지금 수집</button>
+  <header class="hdr">
+    <div class="brand">
+      <div class="brand-name">OT <em>채용 트래커</em></div>
+      <div class="brand-meta">작업치료사 공고 집계<span class="dot"></span>30분마다 자동 수집</div>
+    </div>
+    <div class="actions">
+      <button class="btn primary" id="crawlBtn" onclick="crawlNow()">지금 수집</button>
       {% if me %}
-        <span style="font-size:12px;color:var(--dm)">👤 {{ me.nickname or me.id }}</span>
-        <a class="crawl-btn" style="text-decoration:none;display:inline-block" href="/settings">⚙️ 설정</a>
-        <button class="crawl-btn" onclick="toggleSub()">알림 토글</button>
-        <a class="crawl-btn" style="text-decoration:none;display:inline-block" href="/logout">로그아웃</a>
+        <span class="who">{{ me.nickname or me.id }}</span>
+        <a class="btn" href="/settings">설정</a>
+        <button class="btn" onclick="toggleSub()">알림</button>
+        <a class="btn" href="/logout">로그아웃</a>
       {% else %}
-        <a class="crawl-btn" style="text-decoration:none" href="/login">카카오로 로그인</a>
+        <a class="btn primary" href="/login">카카오 로그인</a>
       {% endif %}
     </div>
-  </div>
+  </header>
 
-  <div class="stats">
-    <div class="stat"><div class="stat-label">전체 공고</div><div class="stat-val green" id="stTotal">-</div></div>
-    <div class="stat"><div class="stat-label">신규 (NEW)</div><div class="stat-val pink" id="stNew">-</div></div>
-    <div class="stat"><div class="stat-label">정규직</div><div class="stat-val blue" id="stFull">-</div></div>
-    {% if me %}<div class="stat"><div class="stat-label">안 읽음</div><div class="stat-val pink" id="stUnread">-</div></div>{% endif %}
-  </div>
+  <section class="stats" aria-label="요약 지표">
+    <div class="stat"><span class="stat-label">전체</span><span class="stat-val" id="stTotal">-</span></div>
+    <div class="stat"><span class="stat-label">신규</span><span class="stat-val new" id="stNew">-</span></div>
+    <div class="stat"><span class="stat-label">정규직</span><span class="stat-val accent" id="stFull">-</span></div>
+    {% if me %}<div class="stat"><span class="stat-label">안 읽음</span><span class="stat-val warn" id="stUnread">-</span></div>{% endif %}
+  </section>
 
-  <div class="filters">
-    <div class="fbtn on" data-f="" onclick="setFilter('')">전체</div>
-    {% if me %}<div class="fbtn" id="unreadToggle" onclick="toggleUnread()">안 읽음만</div>{% endif %}
-    <div class="fbtn" data-f="정규직" onclick="setFilter('정규직')">정규직</div>
-    <div class="fbtn" data-f="작업치료" onclick="setFilter('작업치료')">작업치료</div>
-    <div class="fbtn" data-f="감각통합" onclick="setFilter('감각통합')">감각통합</div>
-    <div class="fbtn" data-f="서울" onclick="setFilter('서울')">서울만</div>
-  </div>
+  <nav class="filters" aria-label="필터">
+    <button class="fbtn on" data-f="" onclick="setFilter('')">전체</button>
+    {% if me %}<button class="fbtn" id="unreadToggle" onclick="toggleUnread()">안 읽음만</button>{% endif %}
+    <button class="fbtn" data-f="정규직" onclick="setFilter('정규직')">정규직</button>
+    <button class="fbtn" data-f="작업치료" onclick="setFilter('작업치료')">작업치료</button>
+    <button class="fbtn" data-f="감각통합" onclick="setFilter('감각통합')">감각통합</button>
+    <button class="fbtn" data-f="서울" onclick="setFilter('서울')">서울</button>
+  </nav>
 
-  <div class="status-msg" id="statusMsg"></div>
-  <div id="jobList"><div class="empty">🔍 수집 버튼을 누르거나 잠시 기다려주세요</div></div>
+  <div class="status-msg" id="statusMsg" role="status" aria-live="polite"></div>
+  <div id="jobList"><div class="empty">수집 버튼을 누르거나 잠시 기다려 주세요</div></div>
 
-  <div class="log-section">
-    <div class="log-title">📊 수집 로그</div>
+  <section class="log-section">
+    <div class="log-title">수집 로그</div>
     <div id="logList"></div>
-  </div>
+  </section>
 </div>
 
 <script>
@@ -149,47 +231,48 @@ async function loadStats() {
 function renderJobs(jobs) {
   const el = document.getElementById('jobList');
   if (!jobs.length) {
-    el.innerHTML = '<div class="empty">📂 해당 조건의 공고가 없습니다</div>';
+    el.innerHTML = '<div class="empty">조건에 맞는 공고가 아직 없습니다</div>';
     return;
   }
-  el.innerHTML = jobs.map((j, i) => `
-    <div class="card ${j.is_new && !j.read ? 'is-new' : ''} ${j.read ? 'read' : ''}" style="animation-delay:${i * 0.03}s">
+  el.innerHTML = jobs.map(j => `
+    <article class="card ${j.is_new && !j.read ? 'is-new' : ''} ${j.read ? 'read' : ''}">
       <div class="card-top">
-        <div style="display:flex;gap:4px;flex-wrap:wrap">
+        <div class="src-row">
           ${(j.sources || [{source:j.source,url:j.url,id:j.id}]).map(s => `<span class="src src-${s.source}">${esc(s.source)}</span>`).join('')}
-          ${j.dup_count > 1 ? `<span class="read-badge">+${j.dup_count - 1}중복</span>` : ''}
+          ${j.dup_count > 1 ? `<span class="dup-badge">+${j.dup_count - 1}</span>` : ''}
         </div>
         ${j.read ? '<span class="read-badge">읽음</span>' : (j.is_new ? '<span class="new-badge">NEW</span>' : '')}
       </div>
-      <div class="card-title">${esc(j.title)}</div>
-      ${j.org ? `<div class="card-org">🏥 ${esc(j.org)}</div>` : ''}
+      <h3 class="card-title">${esc(j.title)}</h3>
+      ${j.org ? `<div class="card-org">${esc(j.org)}</div>` : ''}
       <div class="tags">
-        ${j.location ? `<span class="tag loc">📍 ${esc(j.location)}</span>` : ''}
-        ${j.job_type ? `<span class="tag tp">💼 ${esc(j.job_type)}</span>` : ''}
-        ${j.deadline ? `<span class="tag dl">⏰ ${esc(j.deadline)}</span>` : ''}
+        ${j.location ? `<span class="tag loc">${esc(j.location)}</span>` : ''}
+        ${j.job_type ? `<span class="tag tp">${esc(j.job_type)}</span>` : ''}
+        ${j.deadline ? `<span class="tag dl">마감 ${esc(j.deadline)}</span>` : ''}
       </div>
       <div class="card-btm">
-        <span class="card-date">${j.crawled_at ? j.crawled_at.slice(0, 16) : ''}</span>
-        ${/^https?:\/\//.test(j.url) ? `<a class="card-link" href="${esc(j.url)}" target="_blank" rel="noopener" onclick="markRead('${esc(j.id)}')">공고 보기 →</a>` : `<span class="card-date">🔗 링크 없음</span>`}
+        <span class="card-date">${j.crawled_at ? j.crawled_at.slice(0, 16).replace('T',' ') : ''}</span>
+        ${/^https?:\/\//.test(j.url) ? `<a class="card-link" href="${esc(j.url)}" target="_blank" rel="noopener" onclick="markRead('${esc(j.id)}')">공고 보기 →</a>` : `<span class="card-date">링크 없음</span>`}
       </div>
-    </div>
+    </article>
   `).join('');
 }
 
 function renderLogs(logs) {
   const el = document.getElementById('logList');
-  if (!logs || !logs.length) { el.innerHTML = '<div style="font-size:12px;color:var(--dm)">아직 수집 기록 없음</div>'; return; }
+  if (!logs || !logs.length) { el.innerHTML = '<div style="font-size:12px;color:var(--muted)">아직 수집 기록이 없습니다</div>'; return; }
   el.innerHTML = logs.map(l => `
     <div class="log-item">
-      <span class="log-time">${l.timestamp ? l.timestamp.slice(5, 16) : ''}</span>
-      [${l.source}] 수집 ${l.found}건, 신규 ${l.new_count}건 ${l.status === 'ok' ? '✅' : '❌'}
+      <span class="log-time">${l.timestamp ? l.timestamp.slice(5, 16).replace('T',' ') : ''}</span>
+      <span>${esc(l.source)} · ${l.found}건 중 신규 ${l.new_count}건</span>
+      <span class="${l.status === 'ok' ? 'log-ok' : 'log-fail'}" style="margin-left:auto">${l.status === 'ok' ? '성공' : '실패'}</span>
     </div>
   `).join('');
 }
 
 function setFilter(f) {
   currentFilter = f;
-  document.querySelectorAll('.fbtn').forEach(b => b.classList.toggle('on', (b.dataset.f || '') === f));
+  document.querySelectorAll('.fbtn[data-f]').forEach(b => b.classList.toggle('on', (b.dataset.f || '') === f));
   loadJobs();
 }
 
@@ -197,34 +280,34 @@ async function crawlNow() {
   const btn = document.getElementById('crawlBtn');
   const msg = document.getElementById('statusMsg');
   btn.disabled = true;
-  btn.textContent = '⏳ 수집 중...';
-  msg.textContent = '각 채용 사이트에서 공고를 수집하고 있어요 (약 30초)';
+  btn.textContent = '수집 중…';
+  msg.textContent = '각 사이트에서 공고를 가져오는 중입니다 (약 30초)';
 
   try {
     const r = await fetch('/api/crawl_now', { method: 'POST' });
     const d = await r.json();
     if (!d.ok) {
-      msg.textContent = `⚠️ ${d.error || '실패'}`;
+      msg.textContent = `실패: ${d.error || '알 수 없는 오류'}`;
       btn.disabled = false;
-      btn.textContent = '🔍 지금 수집';
+      btn.textContent = '지금 수집';
       return;
     }
-    msg.textContent = '⏳ 백그라운드 수집 중... (30~90초)';
+    msg.textContent = '백그라운드 수집 중 (30~90초)';
     const poll = setInterval(async () => {
       const s = await (await fetch('/api/crawl_status')).json();
       if (!s.running) {
         clearInterval(poll);
-        msg.textContent = '✅ 수집 완료';
+        msg.textContent = '수집 완료';
         btn.disabled = false;
-        btn.textContent = '🔍 지금 수집';
+        btn.textContent = '지금 수집';
         loadJobs(); loadStats();
         setTimeout(() => { msg.textContent = ''; }, 5000);
       }
     }, 3000);
   } catch (e) {
-    msg.textContent = `❌ 요청 실패: ${e}`;
+    msg.textContent = `요청 실패: ${e}`;
     btn.disabled = false;
-    btn.textContent = '🔍 지금 수집';
+    btn.textContent = '지금 수집';
   }
 }
 
@@ -235,15 +318,18 @@ async function toggleSub() {
   const path = subOn ? '/unsubscribe' : '/subscribe';
   const r = await fetch(path, { method: 'POST' });
   if (r.ok) { subOn = !subOn; alert(subOn ? '알림 ON' : '알림 OFF'); }
-  else alert('로그인 필요');
+  else alert('로그인이 필요합니다');
 }
 
-// 초기 로드
 loadJobs();
 loadStats();
-
-// 30초마다 새로고침
-setInterval(() => { loadJobs(); loadStats(); }, 30000);
+// 크롤러가 30분 간격이라 5분 폴링으로 충분. 탭이 보이지 않을 땐 일시중지.
+setInterval(() => {
+  if (document.visibilityState === 'visible') { loadJobs(); loadStats(); }
+}, 300000);
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') { loadJobs(); loadStats(); }
+});
 </script>
 </body>
 </html>
