@@ -416,69 +416,14 @@ def crawl_jobkorea():
 
 # ── Indeed ──
 def crawl_indeed():
-    source = "Indeed"
-    jobs = []
-    seen = set()
-    base = "https://kr.indeed.com/jobs?q=%EC%9E%91%EC%97%85%EC%B9%98%EB%A3%8C%EC%82%AC&l=%EC%84%9C%EC%9A%B8"
-    try:
-        for page in range(MAX_PAGES):
-            url = f"{base}&start={page * 10}"
-            r = requests.get(url, headers=headers(), timeout=15)
-            r.raise_for_status()
-            soup = BeautifulSoup(r.text, "lxml")
-
-            cards = soup.select(".job_seen_beacon, .resultContent")
-            if not cards:
-                break
-
-            page_added = 0
-            for card in cards:
-                title_el = card.select_one("h2 a, .jobTitle a")
-                if not title_el:
-                    continue
-                title = title_el.get_text(strip=True)
-                link = title_el.get("href", "")
-                if link and not link.startswith("http"):
-                    link = "https://kr.indeed.com" + link
-
-                comp_el = card.select_one("[data-testid='company-name'], .companyName")
-                org = comp_el.get_text(strip=True) if comp_el else ""
-
-                loc_el = card.select_one("[data-testid='text-location'], .companyLocation")
-                location = loc_el.get_text(strip=True) if loc_el else ""
-
-                full_text = f"{title} {org} {location}"
-                if not matches_keyword(full_text):
-                    continue
-                jt = classify_job_type("", full_text)
-                if jt is None:
-                    continue
-
-                job_id = make_id(title + org, "indeed")
-                if job_id in seen:
-                    continue
-                seen.add(job_id)
-
-                jobs.append({
-                    "id": job_id,
-                    "source": source,
-                    "title": title,
-                    "org": org,
-                    "location": location if location else "서울",
-                    "job_type": jt,
-                    "deadline": "",
-                    "url": link,
-                })
-                page_added += 1
-
-            if page_added == 0:
-                break
-            polite_sleep()
-    except Exception as e:
-        log.error(f"[Indeed] 크롤링 실패: {e}")
-        return jobs, str(e)
-
-    return jobs, "ok"
+    """
+    Indeed KR은 2025년 말부터 데이터센터 IP + 기본 UA 요청에 대해 403을 내려
+    requests 기반으로는 수집이 불가능. (JS 챌린지 / Cloudflare 유사 WAF)
+    브라우저 자동화(playwright) 없이는 우회 시도 자체가 부담이라
+    함수는 유지하되 즉시 차단 상태로 리턴한다.
+    ALL_CRAWLERS에서 제외.
+    """
+    return [], "disabled: indeed blocks non-browser traffic with 403"
 
 
 # ── 땡큐오티 ──
@@ -733,7 +678,7 @@ def crawl_isorimall():
 ALL_CRAWLERS = [
     ("사람인", crawl_saramin),
     ("잡코리아", crawl_jobkorea),
-    ("Indeed", crawl_indeed),
+    # ("Indeed", crawl_indeed),  # 403 차단 지속 — 비활성화 (2026-04 확인)
     ("땡큐오티", crawl_thankyouot),
     ("정신건강OT", crawl_kaotmh),
     ("아이톡톡", crawl_childportal),
