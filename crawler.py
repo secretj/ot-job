@@ -623,16 +623,25 @@ def crawl_childportal():
 # ── 오티브레인 (otbrain) ──
 def crawl_otbrain():
     """
-    XpressEngine 기반. HTTP로 접속하며(HTTPS는 self-signed), 공고 목록은
-    `table.bd_lst` 의 `<tr>` 단위. 제목 anchor href는 `?document_srl=...`
-    또는 `?mid=job&document_srl=...`. 페이지네이션은 `&page=N`.
-    제목에 "구인/모집" 키워드도 자주 쓰이므로 매칭 범위 넓힘.
+    XpressEngine 기반. HTTP로 접속(HTTPS는 self-signed).
+
+    오티브레인 구인게시판은 카테고리/고용형태 파라미터를 붙여야 "정규직
+    서울" 공고만 필터링된다. 목록은 `table#bd_lst` 의 `<tr>` 단위이고
+    row 구조는:
+      td.no / td.cate(지역) / td.title > a / td.m_no(고용형태=정직/계약 등)
+      / td.m_no(연봉대) / td.m_no(조회수)
+    공지 row는 `<tr class="notice">` 로 구분되므로 건너뛴다.
+    페이지네이션은 `&page=N`.
     """
     source = "오티브레인"
     jobs = []
     seen = set()
-    base = "http://otbrain.com/index.php?mid=job"
-    OTBRAIN_EXTRA_KEYWORDS = ("구인", "모집", "채용")
+    # category=176 (서울) + type[]=정직 (정규직) 필터 적용
+    base = (
+        "http://otbrain.com/index.php?mid=job&module_srl=113"
+        "&multi_extra_search=113&category=176&type%5B%5D=%EC%A0%95%EC%A7%81"
+    )
+    OTBRAIN_EXTRA_KEYWORDS = ("구인", "모집", "채용", "작업치료")
     try:
         for page in range(1, MAX_PAGES + 1):
             url = base if page == 1 else f"{base}&page={page}"
@@ -640,23 +649,27 @@ def crawl_otbrain():
             r.raise_for_status()
             soup = BeautifulSoup(r.text, "lxml")
 
-            rows = soup.select("table.bd_lst tr")
+            rows = soup.select("table#bd_lst tbody tr")
+            if not rows:
+                rows = soup.select("table.bd_lst tr")
             if not rows:
                 break
 
             page_added = 0
             for row in rows:
-                title_td = row.select_one("td.title a")
-                if not title_td:
+                # 공지 skip
+                cls = row.get("class") or []
+                if "notice" in cls:
                     continue
-                title = title_td.get_text(strip=True)
-                href = title_td.get("href", "")
-                if not title:
+
+                title_a = row.select_one("td.title a")
+                if not title_a:
                     continue
-                # 공지/가이드 글 제거
+                title = title_a.get_text(" ", strip=True)
+                href = title_a.get("href", "")
+                if not title or len(title) < 3:
+                    continue
                 if "공지" in title or "주의사항" in title or "게시판 가기" in title:
-                    continue
-                if not (matches_keyword(title) or any(k in title for k in OTBRAIN_EXTRA_KEYWORDS)):
                     continue
                 if not href.startswith("http"):
                     if href.startswith("/"):
@@ -665,18 +678,31 @@ def crawl_otbrain():
                         continue
 
                 cate_el = row.select_one("td.cate")
-                cate = cate_el.get_text(strip=True) if cate_el else ""
-                full_text = f"{cate} {title}"
+                cate = cate_el.get_text(" ", strip=True) if cate_el else ""
 
-                jt = classify_job_type("", full_text)
+                # 고용형태 td.m_no 첫 번째 = "정직"/"계약" 등
+                m_nos = row.select("td.m_no")
+                emp_type = m_nos[0].get_text(" ", strip=True) if m_nos else ""
+
+                full_text = f"{cate} {title} {emp_type}"
+
+                # URL에서 이미 정규직 필터링했지만 방어적으로 재확인
+                if emp_type and "정직" not in emp_type and "정규" not in emp_type:
+                    continue
+
+                # 키워드 완화: 목록 자체가 작업치료 전문 사이트라 지역/정규직
+                # 조건만 맞으면 수집한다. (매칭 키워드로 좁히면 0건이 잦음)
+                # 단, 공지성 제목은 위에서 이미 걸렀다.
+
+                jt = classify_job_type("정규직", full_text)
                 if jt is None:
                     continue
 
-                # 서울 필터 — 제목/카테에 서울 표기가 있을 때만 수집
+                # 서울 필터 — td.cate 또는 제목에 서울 표기가 있어야 수집
                 if not is_seoul(full_text):
                     continue
 
-                location = "서울"
+                location = cate if cate else "서울"
                 job_id = make_id(title, "otbrain")
                 if job_id in seen:
                     continue
