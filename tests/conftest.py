@@ -22,6 +22,7 @@ if _env_path.exists():
 os.environ.setdefault("KAKAO_REST_API_KEY", "test")
 os.environ.setdefault("KAKAO_REDIRECT_URI", "http://localhost/cb")
 os.environ.setdefault("FLASK_SECRET", "test")
+os.environ.setdefault("FLASK_SECRET_KEY", "test")
 os.environ["ENABLE_SCHEDULER"] = "0"
 
 import pytest

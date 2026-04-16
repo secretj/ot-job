@@ -6,7 +6,7 @@ MariaDB 백엔드.
 import os
 import json
 import secrets
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import requests
@@ -25,12 +25,37 @@ log = get_logger("app")
 KAKAO_REST_API_KEY = os.environ["KAKAO_REST_API_KEY"]
 KAKAO_CLIENT_SECRET = os.environ.get("KAKAO_CLIENT_SECRET", "")
 KAKAO_REDIRECT_URI = os.environ["KAKAO_REDIRECT_URI"]
-FLASK_SECRET_KEY = os.environ.get("FLASK_SECRET_KEY", secrets.token_hex(32))
 CRAWL_INTERVAL_MINUTES = int(os.environ.get("CRAWL_INTERVAL_MINUTES", "30"))
+
+# FLASK_SECRET_KEY: 운영 환경에서는 필수(환경변수 미설정 시 fail fast).
+# 서버리스(cold start)마다 랜덤 생성되면 session cookie 복호화 실패로 세션이 풀리는
+# 버그 재발 방지. 로컬 개발(FLASK_ENV=development 또는 FLASK_DEBUG=1)에서만 fallback 허용.
+_secret = os.environ.get("FLASK_SECRET_KEY")
+if not _secret:
+    _is_dev = (
+        os.environ.get("FLASK_ENV") == "development"
+        or os.environ.get("FLASK_DEBUG") == "1"
+    )
+    if _is_dev:
+        log.warning("flask.secret_key.missing_dev_fallback")
+        _secret = secrets.token_hex(32)
+    else:
+        raise RuntimeError(
+            "FLASK_SECRET_KEY 환경변수가 설정되어야 합니다. "
+            "Vercel 대시보드 > Project > Settings > Environment Variables 에서 "
+            "FLASK_SECRET_KEY 를 추가하세요 (예: `python -c \"import secrets; "
+            "print(secrets.token_hex(32))\"` 출력값)."
+        )
+FLASK_SECRET_KEY = _secret
 
 app = Flask(__name__)
 app.secret_key = FLASK_SECRET_KEY
-app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Lax")
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="Lax",
+    SESSION_COOKIE_SECURE=True,
+    PERMANENT_SESSION_LIFETIME=timedelta(days=30),
+)
 
 
 # ══════════════════════════════════════════
@@ -73,6 +98,28 @@ def init_db():
             if "custom_regions" not in cols:
                 cur.execute(
                     "ALTER TABLE users ADD COLUMN custom_regions TEXT NOT NULL DEFAULT '[]'"
+                )
+
+    # 런타임 마이그레이션: jobs.dedup_key 컬럼이 없으면 추가 + 기존 행 backfill
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT column_name FROM information_schema.columns
+                WHERE table_schema = 'public' AND table_name = 'jobs'
+                """
+            )
+            jcols = {r["column_name"] for r in cur.fetchall()}
+            if "dedup_key" not in jcols:
+                cur.execute("ALTER TABLE jobs ADD COLUMN dedup_key VARCHAR(512)")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_jobs_dedup_key ON jobs (dedup_key)")
+            # NULL인 행 backfill (신규 컬럼 추가 직후 또는 이전 insert가 dedup_key 없던 시기)
+            cur.execute("SELECT id, org, title FROM jobs WHERE dedup_key IS NULL")
+            rows = cur.fetchall()
+            if rows:
+                cur.executemany(
+                    "UPDATE jobs SET dedup_key = %s WHERE id = %s",
+                    [(crawler.dedup_key(r["org"], r["title"]), r["id"]) for r in rows],
                 )
 
 
@@ -327,6 +374,7 @@ def kakao_callback():
         expires_at=expires_at_from_seconds(tok.get("expires_in", 21600)),
     )
     session["user"] = {"id": kakao_id, "nickname": nickname}
+    session.permanent = True
     log.info("auth.login", user_id=kakao_id)
     return redirect(url_for("index"))
 
@@ -400,30 +448,53 @@ def health():
 @app.route("/api/jobs")
 def api_jobs():
     me = session.get("user")
-    keyword = request.args.get("keyword", "")
-    only_unread = request.args.get("unread") == "1"
+    # 신규 파라미터: q(검색어), offset, limit, include_read
+    # include_read: 1이면 읽은 공고도 포함 (기본 0 = 안 읽은 것만 / 비로그인은 전체)
+    include_read = request.args.get("include_read") == "1"
+    q = (request.args.get("q") or "").strip()
+    try:
+        offset = max(0, int(request.args.get("offset", "0")))
+    except ValueError:
+        offset = 0
+    try:
+        limit = int(request.args.get("limit", "50"))
+    except ValueError:
+        limit = 50
+    limit = max(1, min(limit, 100))
+
+    # SQL 쿼리 구성: ILIKE 로 대소문자 무시 부분 검색
+    # 검색 대상: title, org, location, job_type (tags UI에 사용되는 필드)
+    where_clauses = []
+    params = []
+    if q:
+        where_clauses.append(
+            "(title ILIKE %s OR org ILIKE %s OR location ILIKE %s OR job_type ILIKE %s)"
+        )
+        pat = f"%{q}%"
+        params.extend([pat, pat, pat, pat])
+    where_sql = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
+
+    # 중복 그룹화가 Python 레벨에서 일어나므로, 안전 상한 내에서 모두 가져와
+    # 그룹핑 → 필터 → 슬라이싱. 현재 규모(수천 이하)에 적합한 trade-off.
     with get_conn() as conn:
         with conn.cursor() as cur:
-            if keyword:
-                q = f"%{keyword}%"
-                cur.execute(
-                    "SELECT * FROM jobs WHERE title LIKE %s OR org LIKE %s OR location LIKE %s OR job_type LIKE %s "
-                    "ORDER BY is_new DESC, crawled_at DESC LIMIT 200",
-                    (q, q, q, q),
-                )
-            else:
-                cur.execute(
-                    "SELECT * FROM jobs ORDER BY is_new DESC, crawled_at DESC LIMIT 200"
-                )
+            cur.execute(
+                f"SELECT * FROM jobs {where_sql} ORDER BY is_new DESC, crawled_at DESC LIMIT 2000",
+                tuple(params),
+            )
             rows = cur.fetchall()
     jobs = [dict(r) for r in rows]
     _attach_read_flag(jobs, me)
     jobs = _group_duplicates(jobs)
     if me:
-        if only_unread:
+        if not include_read:
             jobs = [j for j in jobs if not j["read"]]
         jobs.sort(key=lambda j: (j["read"], not j.get("is_new")))
-    return jsonify(jobs)
+
+    total = len(jobs)
+    page = jobs[offset:offset + limit]
+    has_more = (offset + limit) < total
+    return jsonify({"jobs": page, "has_more": has_more, "next_offset": offset + len(page), "total": total})
 
 
 @app.route("/api/jobs/<job_id>/read", methods=["POST"])

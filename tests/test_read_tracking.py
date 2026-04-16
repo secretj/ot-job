@@ -67,21 +67,57 @@ def test_api_jobs_includes_read_flag():
     client = app_mod.app.test_client()
     with client.session_transaction() as s:
         s["user"] = {"id": 999, "nickname": "t"}
-    r = client.get("/api/jobs")
+    r = client.get("/api/jobs?include_read=1")
     data = r.get_json()
-    j4 = next((x for x in data if x["id"] == "job4"), None)
+    jobs = data["jobs"] if isinstance(data, dict) else data
+    j4 = next((x for x in jobs if x["id"] == "job4"), None)
     assert j4 is not None
     assert j4["read"] is True
 
 
-def test_api_jobs_unread_filter():
+def test_api_jobs_unread_default():
+    """기본 동작: 읽은 공고는 제외 (include_read=0)."""
     _insert_user(888)
     _insert_job("job5"); _insert_job("job6")
     app_mod.mark_job_read(888, "job5")
     client = app_mod.app.test_client()
     with client.session_transaction() as s:
         s["user"] = {"id": 888, "nickname": "t"}
-    r = client.get("/api/jobs?unread=1")
-    ids = {x["id"] for x in r.get_json()}
+    r = client.get("/api/jobs")
+    data = r.get_json()
+    jobs = data["jobs"] if isinstance(data, dict) else data
+    ids = {x["id"] for x in jobs}
     assert "job5" not in ids
     assert "job6" in ids
+
+
+def test_api_jobs_search_query():
+    """q 파라미터: title ILIKE 매칭."""
+    _insert_user(777)
+    _insert_job("jobS1", title="응급실 간호사")
+    _insert_job("jobS2", title="원무과 사무")
+    client = app_mod.app.test_client()
+    with client.session_transaction() as s:
+        s["user"] = {"id": 777, "nickname": "t"}
+    r = client.get("/api/jobs?q=응급실&include_read=1")
+    data = r.get_json()
+    jobs = data["jobs"]
+    ids = {x["id"] for x in jobs}
+    assert "jobS1" in ids
+    assert "jobS2" not in ids
+    assert "has_more" in data
+
+
+def test_api_jobs_pagination():
+    """offset/limit: has_more 플래그 동작."""
+    _insert_user(666)
+    for i in range(5):
+        _insert_job(f"jobP{i}", title=f"공고{i}")
+    client = app_mod.app.test_client()
+    with client.session_transaction() as s:
+        s["user"] = {"id": 666, "nickname": "t"}
+    r = client.get("/api/jobs?include_read=1&limit=2&offset=0")
+    data = r.get_json()
+    assert len(data["jobs"]) <= 2
+    assert isinstance(data["has_more"], bool)
+    assert data["next_offset"] >= len(data["jobs"])
