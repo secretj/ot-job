@@ -103,6 +103,27 @@ org+title을 정규화(공백/괄호/채용·모집 등 노이즈 제거, 소문
 
 ---
 
+## 환경변수 (Vercel)
+
+Vercel Dashboard → Project → Settings → Environment Variables 에 등록.
+
+- `KAKAO_REST_API_KEY`, `KAKAO_CLIENT_SECRET`, `KAKAO_REDIRECT_URI` — Fly와 동일 (프로덕션 도메인 기준)
+- `FLASK_SECRET_KEY` — **필수**. 미설정 시 앱 부팅 실패 (serverless cold start마다 세션이 풀리는 버그 차단).
+  ```bash
+  python3 -c "import secrets; print(secrets.token_hex(32))"
+  ```
+  출력값을 등록. 키 회전 시 모든 기존 세션 무효화 → 재로그인 필요.
+- `DATABASE_URL` — Neon **pooler 엔드포인트** 사용.
+  ```
+  postgresql://user:pass@ep-xxx-pooler.<region>.aws.neon.tech/<db>?sslmode=require
+  ```
+  `-pooler` 서브도메인이 포함된 호스트를 써야 Neon의 PgBouncer가 serverless 환경에서 커넥션 풀링을 담당.
+  pooler 미사용 시 매 요청마다 신규 커넥션 핸드셰이크로 응답 지연이 누적됨.
+- `CRAWL_INTERVAL_MINUTES` = `30` (선택)
+- `ENABLE_SCHEDULER` — serverless 환경에서는 보통 `0`으로 둬서 스케줄러 비활성 (별도 crawler 워커 사용 시).
+
+---
+
 ## 테스트
 
 ```bash
