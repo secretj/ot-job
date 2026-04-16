@@ -25,10 +25,12 @@ CREATE TABLE IF NOT EXISTS jobs (
     url         VARCHAR(1024),
     crawled_at  VARCHAR(32),
     is_new      BOOLEAN      NOT NULL DEFAULT TRUE,
-    notified    BOOLEAN      NOT NULL DEFAULT FALSE
+    notified    BOOLEAN      NOT NULL DEFAULT FALSE,
+    dedup_key   VARCHAR(512) NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_jobs_is_new_crawled ON jobs (is_new, crawled_at);
 CREATE INDEX IF NOT EXISTS idx_jobs_source ON jobs (source);
+CREATE INDEX IF NOT EXISTS idx_jobs_dedup_key ON jobs (dedup_key);
 
 CREATE TABLE IF NOT EXISTS job_reads (
     kakao_id BIGINT      NOT NULL REFERENCES users(kakao_id) ON DELETE CASCADE,
@@ -45,7 +47,10 @@ CREATE TABLE IF NOT EXISTS crawl_log (
     source     VARCHAR(64),
     found      INTEGER,
     new_count  INTEGER,
-    status     VARCHAR(255)
+    status     TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_crawl_log_source ON crawl_log (source);
 CREATE INDEX IF NOT EXISTS idx_crawl_log_time ON crawl_log (timestamp);
+
+-- 기존 스키마에서 crawl_log.status가 VARCHAR(255)였다면 TEXT로 확장.
+ALTER TABLE crawl_log ALTER COLUMN status TYPE TEXT;

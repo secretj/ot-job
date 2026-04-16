@@ -2,18 +2,22 @@
 from datetime import datetime
 
 import app as app_mod
+import crawler
 from db import get_conn
 
 
-def _insert_job(job_id, title="테스트 공고"):
+def _insert_job(job_id, title="테스트 공고", org="A병원"):
+    # dedup_key 는 /api/jobs 쿼리의 WHERE dedup_key IS NOT NULL 필터 때문에
+    # 테스트 데이터에도 반드시 채워 줘야 한다.
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "INSERT INTO jobs (id, source, title, org, location, job_type, url, crawled_at, is_new) "
-                "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,TRUE) "
-                "ON CONFLICT (id) DO UPDATE SET title=EXCLUDED.title",
-                (job_id, "사람인", title, "A병원", "서울", "정규직",
-                 "https://e.com/x", datetime.now().isoformat()),
+                "INSERT INTO jobs (id, source, title, org, location, job_type, url, crawled_at, is_new, dedup_key) "
+                "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,TRUE,%s) "
+                "ON CONFLICT (id) DO UPDATE SET title=EXCLUDED.title, dedup_key=EXCLUDED.dedup_key",
+                (job_id, "사람인", title, org, "서울", "정규직",
+                 "https://e.com/x", datetime.now().isoformat(),
+                 crawler.dedup_key(org, title)),
             )
 
 

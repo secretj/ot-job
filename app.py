@@ -121,6 +121,16 @@ def init_db():
                     "UPDATE jobs SET dedup_key = %s WHERE id = %s",
                     [(crawler.dedup_key(r["org"], r["title"]), r["id"]) for r in rows],
                 )
+            # backfill 후 NOT NULL 제약 강제 (새 insert 누락 race 차단)
+            cur.execute(
+                """
+                SELECT is_nullable FROM information_schema.columns
+                WHERE table_schema='public' AND table_name='jobs' AND column_name='dedup_key'
+                """
+            )
+            r = cur.fetchone()
+            if r and r["is_nullable"] == "YES":
+                cur.execute("ALTER TABLE jobs ALTER COLUMN dedup_key SET NOT NULL")
 
 
 # ══════════════════════════════════════════
@@ -297,26 +307,101 @@ def expires_at_from_seconds(sec):
 # ══════════════════════════════════════════
 #  Routes
 # ══════════════════════════════════════════
-def _group_duplicates(jobs):
-    groups = {}
-    order = []
-    for j in jobs:
-        key = crawler.dedup_key(j.get("org", ""), j.get("title", ""))
-        if key not in groups:
-            groups[key] = dict(j)
-            groups[key]["sources"] = []
-            groups[key]["dup_count"] = 0
-            order.append(key)
-        g = groups[key]
-        g["sources"].append({"source": j.get("source"), "url": j.get("url"), "id": j.get("id")})
-        g["dup_count"] += 1
-        if (j.get("is_new") and not g.get("is_new")) or (
-            j.get("is_new") == g.get("is_new") and (j.get("crawled_at") or "") > (g.get("crawled_at") or "")
-        ):
-            for f in ("id", "source", "url", "crawled_at", "is_new", "deadline", "job_type", "location"):
-                g[f] = j.get(f)
-        g["read"] = g.get("read", True) and j.get("read", False)
-    return [groups[k] for k in order]
+def _fetch_grouped_jobs(q, offset, limit, me, include_read):
+    """
+    DB 레벨 DISTINCT ON (dedup_key) + window function으로 중복 그룹핑 + 페이지네이션.
+
+    반환: (jobs, total)
+      - jobs: 각 그룹 dict (대표 row + sources 리스트 + dup_count)
+      - total: 그룹핑된 distinct 수 (읽음 필터 반영)
+
+    include_read/me 조합:
+      - me=None          : 읽음 필터 무시 (전체 노출)
+      - me, include_read=True  : 전체 노출. 각 job에 read 플래그만 부착.
+      - me, include_read=False : 대표 id가 read가 아닌 그룹만 노출.
+    """
+    # q(ILIKE) 필터는 parameterized. dedup_key IS NOT NULL 는 race-condition safety.
+    where_clauses = ["dedup_key IS NOT NULL"]
+    params = []
+    if q:
+        where_clauses.append(
+            "(title ILIKE %s OR org ILIKE %s OR location ILIKE %s OR job_type ILIKE %s)"
+        )
+        pat = f"%{q}%"
+        params.extend([pat, pat, pat, pat])
+    where_sql = "WHERE " + " AND ".join(where_clauses)
+
+    # DISTINCT ON (dedup_key)은 ORDER BY 의 첫 키가 dedup_key여야 함.
+    # 같은 dedup_key 내에서 is_new DESC, crawled_at DESC 로 대표 row 선정.
+    # window 함수(json_agg/COUNT OVER)는 DISTINCT ON 이전(윈도우 프레임 전체)에서
+    # 계산되므로, 같은 dedup_key 그룹 내 모든 member들이 sources에 포함된다.
+    base_cte = f"""
+        WITH filtered AS (
+            SELECT * FROM jobs {where_sql}
+        ),
+        grouped AS (
+            SELECT DISTINCT ON (dedup_key)
+                id, source, title, org, location, job_type, deadline, url,
+                crawled_at, is_new, dedup_key,
+                COUNT(*) OVER (PARTITION BY dedup_key) AS dup_count,
+                json_agg(json_build_object('id', id, 'source', source, 'url', url))
+                    OVER (PARTITION BY dedup_key ORDER BY crawled_at DESC, id
+                          ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS sources
+            FROM filtered
+            ORDER BY dedup_key, is_new DESC, crawled_at DESC
+        )
+    """
+
+    # 읽음 필터: include_read=False 이고 로그인된 경우에만 적용.
+    # 대표 id가 job_reads에 없는 그룹만 노출 (단순화된 시맨틱).
+    # NOT EXISTS 서브쿼리: id가 PK라 인덱스 조회.
+    read_filter_sql = ""
+    read_filter_params = []
+    if me and not include_read:
+        read_filter_sql = (
+            "WHERE NOT EXISTS ("
+            "  SELECT 1 FROM job_reads r WHERE r.job_id = g.id AND r.kakao_id = %s"
+            ")"
+        )
+        read_filter_params.append(me["id"])
+
+    list_sql = (
+        base_cte
+        + f" SELECT * FROM grouped g {read_filter_sql}"
+        + " ORDER BY is_new DESC, crawled_at DESC LIMIT %s OFFSET %s"
+    )
+    count_sql = (
+        base_cte
+        + f" SELECT COUNT(*) AS c FROM grouped g {read_filter_sql}"
+    )
+
+    list_params = tuple(params + read_filter_params + [limit, offset])
+    count_params = tuple(params + read_filter_params)
+
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(list_sql, list_params)
+            rows = cur.fetchall()
+            cur.execute(count_sql, count_params)
+            total = cur.fetchone()["c"]
+
+    jobs = []
+    for r in rows:
+        j = dict(r)
+        # sources: json_agg → psycopg가 dict/list로 파싱해 주지만, 문자열로 오는 드라이버 대비 가드.
+        s = j.get("sources")
+        if isinstance(s, str):
+            try:
+                j["sources"] = json.loads(s)
+            except Exception:
+                j["sources"] = []
+        elif s is None:
+            j["sources"] = []
+        # dedup_key 내부 필드는 응답에 불필요
+        j.pop("dedup_key", None)
+        jobs.append(j)
+
+    return jobs, total
 
 
 def _attach_read_flag(jobs, me):
@@ -333,14 +418,10 @@ def _attach_read_flag(jobs, me):
 @app.route("/")
 def index():
     me = session.get("user")
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT * FROM jobs ORDER BY is_new DESC, crawled_at DESC LIMIT 200"
-            )
-            jobs = [dict(j) for j in cur.fetchall()]
+    # 초기 렌더에는 include_read=True (모든 그룹 노출) + limit=50 고정.
+    # 무한 스크롤 이후 페이지는 /api/jobs 가 담당.
+    jobs, _ = _fetch_grouped_jobs(q="", offset=0, limit=50, me=me, include_read=True)
     _attach_read_flag(jobs, me)
-    jobs = _group_duplicates(jobs)
     if me:
         jobs.sort(key=lambda j: (j["read"], not j.get("is_new")))
     return render_template("index.html", jobs=jobs, me=me)
@@ -448,8 +529,8 @@ def health():
 @app.route("/api/jobs")
 def api_jobs():
     me = session.get("user")
-    # 신규 파라미터: q(검색어), offset, limit, include_read
-    # include_read: 1이면 읽은 공고도 포함 (기본 0 = 안 읽은 것만 / 비로그인은 전체)
+    # 파라미터: q(검색어), offset, limit, include_read
+    # include_read: 1이면 읽은 공고 그룹 포함. 비로그인은 해당 옵션 무시(전체 노출).
     include_read = request.args.get("include_read") == "1"
     q = (request.args.get("q") or "").strip()
     try:
@@ -462,39 +543,21 @@ def api_jobs():
         limit = 50
     limit = max(1, min(limit, 100))
 
-    # SQL 쿼리 구성: ILIKE 로 대소문자 무시 부분 검색
-    # 검색 대상: title, org, location, job_type (tags UI에 사용되는 필드)
-    where_clauses = []
-    params = []
-    if q:
-        where_clauses.append(
-            "(title ILIKE %s OR org ILIKE %s OR location ILIKE %s OR job_type ILIKE %s)"
-        )
-        pat = f"%{q}%"
-        params.extend([pat, pat, pat, pat])
-    where_sql = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
-
-    # 중복 그룹화가 Python 레벨에서 일어나므로, 안전 상한 내에서 모두 가져와
-    # 그룹핑 → 필터 → 슬라이싱. 현재 규모(수천 이하)에 적합한 trade-off.
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                f"SELECT * FROM jobs {where_sql} ORDER BY is_new DESC, crawled_at DESC LIMIT 2000",
-                tuple(params),
-            )
-            rows = cur.fetchall()
-    jobs = [dict(r) for r in rows]
+    # 읽음 필터 + 중복 그룹핑 + LIMIT/OFFSET을 DB 레벨에서 처리.
+    # 비로그인이면 include_read 무시(항상 전체) — _fetch_grouped_jobs 내부 분기.
+    jobs, total = _fetch_grouped_jobs(
+        q=q, offset=offset, limit=limit, me=me, include_read=include_read
+    )
+    # 각 job의 read 플래그 부착 (UI 토글 표시용).
     _attach_read_flag(jobs, me)
-    jobs = _group_duplicates(jobs)
-    if me:
-        if not include_read:
-            jobs = [j for j in jobs if not j["read"]]
-        jobs.sort(key=lambda j: (j["read"], not j.get("is_new")))
 
-    total = len(jobs)
-    page = jobs[offset:offset + limit]
-    has_more = (offset + limit) < total
-    return jsonify({"jobs": page, "has_more": has_more, "next_offset": offset + len(page), "total": total})
+    has_more = (offset + len(jobs)) < total
+    return jsonify({
+        "jobs": jobs,
+        "has_more": has_more,
+        "next_offset": offset + len(jobs),
+        "total": total,
+    })
 
 
 @app.route("/api/jobs/<job_id>/read", methods=["POST"])
@@ -502,25 +565,23 @@ def api_mark_read(job_id):
     me = session.get("user")
     if not me:
         return jsonify({"error": "로그인 필요"}), 401
+    now_iso = datetime.now().isoformat()
     with get_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT org, title FROM jobs WHERE id=%s", (job_id,))
+            # 대상 job의 dedup_key 조회
+            cur.execute("SELECT dedup_key FROM jobs WHERE id=%s", (job_id,))
             row = cur.fetchone()
-            if not row:
-                # 존재하지 않는 job_id라도 읽음 마크 자체는 기록 허용
+            if not row or not row["dedup_key"]:
+                # 존재하지 않거나 dedup_key가 없는(race) job_id라도 단건 마크는 허용
                 cur.execute(
                     "INSERT INTO job_reads (kakao_id, job_id, read_at) VALUES (%s, %s, %s) ON CONFLICT (kakao_id, job_id) DO NOTHING",
-                    (me["id"], job_id, datetime.now().isoformat()),
+                    (me["id"], job_id, now_iso),
                 )
-                return jsonify({"ok": True})
-            target_key = crawler.dedup_key(row["org"], row["title"])
-            cur.execute("SELECT id, org, title FROM jobs")
-            all_rows = cur.fetchall()
-            matching = [
-                r["id"] for r in all_rows if crawler.dedup_key(r["org"], r["title"]) == target_key
-            ]
-            now_iso = datetime.now().isoformat()
-            # 배치 INSERT IGNORE 로 N+1 회피
+                return jsonify({"ok": True, "marked": 1})
+
+            # 동일 dedup_key를 가진 모든 중복 공고 id를 인덱스로 조회 (전체 스캔 제거)
+            cur.execute("SELECT id FROM jobs WHERE dedup_key=%s", (row["dedup_key"],))
+            matching = [r["id"] for r in cur.fetchall()]
             if matching:
                 cur.executemany(
                     "INSERT INTO job_reads (kakao_id, job_id, read_at) VALUES (%s, %s, %s) ON CONFLICT (kakao_id, job_id) DO NOTHING",

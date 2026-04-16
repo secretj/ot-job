@@ -85,17 +85,22 @@ def insert_job(conn, job):
         if cur.fetchone():
             return False
         cur.execute(
-            "INSERT INTO jobs (id, source, title, org, location, job_type, deadline, url, crawled_at) "
-            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+            "INSERT INTO jobs (id, source, title, org, location, job_type, deadline, url, crawled_at, dedup_key) "
+            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
             (
                 job["id"], job["source"], job["title"], job["org"], job["location"],
                 job["job_type"], job["deadline"], job["url"], datetime.now().isoformat(),
+                dedup_key(job["org"], job["title"]),
             ),
         )
     return True
 
 
 def log_crawl(conn, source, found, new_count, status="ok"):
+    # status는 예외 메시지 전체를 받을 수 있어 매우 길 수 있다. DB는 TEXT지만
+    # 가독성과 용량을 위해 1000자로 방어적 truncate.
+    if status and len(status) > 1000:
+        status = status[:997] + "..."
     with conn.cursor() as cur:
         cur.execute(
             "INSERT INTO crawl_log (timestamp, source, found, new_count, status) "
